@@ -1,6 +1,7 @@
 node_modules/
 session/
 pairing_code.txt
+qr.txt
 stats.json
 *.log
 .DS_Store
