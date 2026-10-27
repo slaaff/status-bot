@@ -60,7 +60,6 @@ console.error = (...args) => {
 };
 
 const configPath = path.resolve('./config.json');
-const statsPath = path.resolve('./stats.json');
 
 function loadConfig() {
   const defaults = {
@@ -86,25 +85,6 @@ function saveConfig() {
   }, 1000);
 }
 
-function loadStats() {
-  const defaults = { viewed: 0, liked: 0, totalViewsReceived: 0, viewsReceived: {} };
-  try {
-    if (fs.existsSync(statsPath)) {
-      return { ...defaults, ...JSON.parse(fs.readFileSync(statsPath, 'utf8')) };
-    }
-  } catch {}
-  return defaults;
-}
-
-let stats = loadStats();
-let saveStatsTimer = null;
-function saveStats() {
-  if (saveStatsTimer) return;
-  saveStatsTimer = setTimeout(() => {
-    fs.writeFile(statsPath, JSON.stringify(stats, null, 2), () => {});
-    saveStatsTimer = null;
-  }, 2000);
-}
 
 /**
  * Wrapper com Cache LRU em memória para useMultiFileAuthState
@@ -113,7 +93,7 @@ function saveStats() {
 async function useCachedAuthState(sessionDir) {
   const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
   const cache = new Map();
-  const MAX_CACHE = 2000;
+  const MAX_CACHE = 400;
 
   function cacheGet(key) {
     if (!cache.has(key)) return undefined;
@@ -176,7 +156,7 @@ async function useCachedAuthState(sessionDir) {
 
 // Cache leve de mensagens para retries (máx 500 mensagens)
 const msgRetryCache = new Map();
-const MAX_RETRY_CACHE = 500;
+const MAX_RETRY_CACHE = 50;
 function cacheMessage(m) {
   if (m?.key?.id && m?.message) {
     if (msgRetryCache.size >= MAX_RETRY_CACHE) {
@@ -189,7 +169,7 @@ function cacheMessage(m) {
 
 // Deduplicação de status para evitar curtir/contar o mesmo status mais de uma vez
 const processedStatusIds = new Set();
-const MAX_PROCESSED_STATUS = 3000;
+const MAX_PROCESSED_STATUS = 1000;
 function isStatusAlreadyProcessed(statusId) {
   if (!statusId) return false;
   if (processedStatusIds.has(statusId)) return true;
@@ -208,7 +188,6 @@ const MAX_BACKOFF_MS = 30000;
 
 async function startBot() {
   config = loadConfig();
-  stats = loadStats();
 
   // Limpa socket e listeners anteriores para evitar conexões zumbis
   if (activeSock) {
@@ -248,59 +227,7 @@ async function startBot() {
   // Descarta mensagens antigas de sincronização de histórico silenciosamente
   sock.ev.on('messaging-history.set', () => {});
 
-  // Captura recibos de leitura (visualizações de status@broadcast)
-  sock.ev.on('message-receipt.update', async (receipts) => {
-    if (!Array.isArray(receipts)) return;
-    for (const item of receipts) {
-      if (item.key?.remoteJid === 'status@broadcast') {
-        const statusId = item.key.id;
-        const viewer = item.receipt?.userJid;
-        const isRead = !!item.receipt?.readTimestamp;
-
-        if (isRead && viewer) {
-          if (!stats.viewsReceived) stats.viewsReceived = {};
-          if (!stats.viewsReceived[statusId]) stats.viewsReceived[statusId] = [];
-
-          if (!stats.viewsReceived[statusId].includes(viewer)) {
-            stats.viewsReceived[statusId].push(viewer);
-            stats.totalViewsReceived = (stats.totalViewsReceived || 0) + 1;
-            saveStats();
-            const viewerNum = viewer.split('@')[0];
-            console.log(`[STATUS] Status visualizado por +${viewerNum} (Total recebidas: ${stats.totalViewsReceived})`);
-          }
-        }
-      }
-    }
-  });
-
-  // Captura atualizações de mensagens para status@broadcast (ex: recibos em lote)
-  sock.ev.on('messages.update', async (updates) => {
-    if (!Array.isArray(updates)) return;
-    for (const item of updates) {
-      if (item.key?.remoteJid === 'status@broadcast') {
-        const statusId = item.key.id;
-        const userReceipts = item.update?.userReceipt;
-        if (Array.isArray(userReceipts)) {
-          if (!stats.viewsReceived) stats.viewsReceived = {};
-          if (!stats.viewsReceived[statusId]) stats.viewsReceived[statusId] = [];
-
-          let changed = false;
-          for (const ur of userReceipts) {
-            if (ur.userJid && ur.readTimestamp && !stats.viewsReceived[statusId].includes(ur.userJid)) {
-              stats.viewsReceived[statusId].push(ur.userJid);
-              stats.totalViewsReceived = (stats.totalViewsReceived || 0) + 1;
-              changed = true;
-            }
-          }
-          if (changed) {
-            saveStats();
-            console.log(`[STATUS] Visualizações de status atualizadas (Total: ${stats.totalViewsReceived})`);
-          }
-        }
-      }
-    }
-  });
-
+  
   // Monitorar status da conexão
   sock.ev.on('connection.update', (update) => {
     const { connection, lastDisconnect, qr } = update;
@@ -371,12 +298,10 @@ async function startBot() {
             };
             const sender = participant.split('@')[0] || 'Contato';
 
-            // Modo Visualizar ou Ambos -> marca como lido
+            // Modo Visualizar ou Ambos -> marca como lido (sem gravar contadores em disco)
             if (config.mode === 'view' || config.mode === 'both') {
               await sock.readMessages([statusKey]);
-              stats.viewed = (stats.viewed || 0) + 1;
-              saveStats();
-              console.log(`[STATUS] Visualizado de +${sender} (Total: ${stats.viewed})`);
+              console.log(`[STATUS] Visualizado de +${sender}`);
             }
 
             // Modo Curtir ou Ambos -> reage no status
@@ -389,9 +314,7 @@ async function startBot() {
               }, {
                 statusJidList: [participant]
               });
-              stats.liked = (stats.liked || 0) + 1;
-              saveStats();
-              console.log(`[STATUS] Curtido com ${config.emoji || '❤️'} de +${sender}${config.mode === 'like' ? ' (Círculo verde mantido)' : ''} (Total: ${stats.liked})`);
+              console.log(`[STATUS] Curtido com ${config.emoji || '❤️'} de +${sender}${config.mode === 'like' ? ' (Círculo verde mantido)' : ''}`);
             }
           } catch (err) {
             console.error('[STATUS ERRO]', err.message);
@@ -486,9 +409,6 @@ async function startBot() {
 
         const msg = `⚡ *STATUS BOT PESSOAL* ⚡\n\n` +
           `⚙️ *Modo Atual:* ${modoDesc}\n` +
-          `👁️ *Total Visualizados:* ${stats.viewed || 0}\n` +
-          `👀 *Views Recebidas (Status):* ${stats.totalViewsReceived || 0}\n` +
-          `❤️ *Total Curtidos:* ${stats.liked || 0}\n` +
           `💾 *RAM:* ${ramMB} MB\n` +
           `⏱️ *Tempo Ativo:* ${h}h ${min}m ${s}s\n\n` +
           `*Comandos (Prefixo: \`.\`):*\n` +
