@@ -1,10 +1,12 @@
 /**
- * WhatsApp Status Bot (Dedicado & Ultraleve)
+ * WhatsApp Status Bot (Dedicado, Ultraleve & Otimizado)
  * 
- * Funções Exclusivas:
+ * Funcionalidades:
  * - Visualizador e Curtidor Automático de Status (Stories)
  * - Modos: Só Visualizar, Só Curtir (mantém círculo verde), Ambos e Desligado
  * - Isolamento Total: Ignora 100% de terceiros e grupos, responde apenas a comandos 'fromMe'
+ * - Cache LRU em memória para evitar gargalos de I/O de disco
+ * - Backoff exponencial e reconexão segura
  */
 
 import makeWASocket, {
@@ -36,8 +38,13 @@ function loadConfig() {
 }
 
 let config = loadConfig();
+let saveConfigTimer = null;
 function saveConfig() {
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+  if (saveConfigTimer) return;
+  saveConfigTimer = setTimeout(() => {
+    fs.writeFile(configPath, JSON.stringify(config, null, 2), () => {});
+    saveConfigTimer = null;
+  }, 1000);
 }
 
 function loadStats() {
@@ -55,25 +62,116 @@ let saveStatsTimer = null;
 function saveStats() {
   if (saveStatsTimer) return;
   saveStatsTimer = setTimeout(() => {
-    fs.writeFileSync(statsPath, JSON.stringify(stats, null, 2));
+    fs.writeFile(statsPath, JSON.stringify(stats, null, 2), () => {});
     saveStatsTimer = null;
   }, 2000);
 }
 
-// Cache de mensagens para prevenir falhas de decodificação em retries
+/**
+ * Wrapper com Cache LRU em memória para useMultiFileAuthState
+ * Elimina milhares de leituras lentas em disco na Oracle Cloud
+ */
+async function useCachedAuthState(sessionDir) {
+  const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
+  const cache = new Map();
+  const MAX_CACHE = 2000;
+
+  function cacheGet(key) {
+    if (!cache.has(key)) return undefined;
+    const val = cache.get(key);
+    cache.delete(key);
+    cache.set(key, val);
+    return val;
+  }
+
+  function cacheSet(key, val) {
+    if (cache.has(key)) cache.delete(key);
+    else if (cache.size >= MAX_CACHE) {
+      const first = cache.keys().next().value;
+      cache.delete(first);
+    }
+    cache.set(key, val);
+  }
+
+  const origGet = state.keys.get;
+  const origSet = state.keys.set;
+
+  state.keys.get = async (type, ids) => {
+    const result = {};
+    const missing = [];
+
+    for (const id of ids) {
+      const key = `${type}:${id}`;
+      const cached = cacheGet(key);
+      if (cached !== undefined) {
+        if (cached !== null) result[id] = cached;
+      } else {
+        missing.push(id);
+      }
+    }
+
+    if (missing.length > 0) {
+      const loaded = await origGet(type, missing);
+      for (const id of missing) {
+        const val = loaded[id] ?? null;
+        cacheSet(`${type}:${id}`, val);
+        if (val !== null) result[id] = val;
+      }
+    }
+
+    return result;
+  };
+
+  state.keys.set = async (data) => {
+    for (const type in data) {
+      for (const id in data[type]) {
+        const val = data[type][id];
+        cacheSet(`${type}:${id}`, val ?? null);
+      }
+    }
+    return origSet(data);
+  };
+
+  return { state, saveCreds };
+}
+
+// Cache leve de mensagens para retries (máx 500 mensagens)
 const msgRetryCache = new Map();
+const MAX_RETRY_CACHE = 500;
+function cacheMessage(m) {
+  if (m?.key?.id && m?.message) {
+    if (msgRetryCache.size >= MAX_RETRY_CACHE) {
+      const oldestKey = msgRetryCache.keys().next().value;
+      msgRetryCache.delete(oldestKey);
+    }
+    msgRetryCache.set(m.key.id, m.message);
+  }
+}
+
+// Deduplicação de status para evitar curtir/contar o mesmo status mais de uma vez
+const processedStatusIds = new Set();
+const MAX_PROCESSED_STATUS = 3000;
+function isStatusAlreadyProcessed(statusId) {
+  if (!statusId) return false;
+  if (processedStatusIds.has(statusId)) return true;
+  if (processedStatusIds.size >= MAX_PROCESSED_STATUS) {
+    const oldest = processedStatusIds.values().next().value;
+    processedStatusIds.delete(oldest);
+  }
+  processedStatusIds.add(statusId);
+  return false;
+}
 
 let activeSock = null;
 let isReconnecting = false;
+let reconnectAttempts = 0;
+const MAX_BACKOFF_MS = 30000;
 
 async function startBot() {
   config = loadConfig();
   stats = loadStats();
 
-  const { state, saveCreds } = await useMultiFileAuthState('./session');
-  const { version } = await fetchLatestBaileysVersion();
-
-  // Limpa socket anterior se houver
+  // Limpa socket e listeners anteriores para evitar conexões zumbis
   if (activeSock) {
     try {
       activeSock.ev.removeAllListeners();
@@ -82,16 +180,19 @@ async function startBot() {
     activeSock = null;
   }
 
+  const { state, saveCreds } = await useCachedAuthState('./session');
+  const { version } = await fetchLatestBaileysVersion();
+
   const sock = makeWASocket({
     version,
-    logger: pino({ level: 'silent' }),
+    logger: pino({ level: 'warn' }),
     printQRInTerminal: false,
     auth: state,
     browser: Browsers.macOS('Desktop'),
     syncFullHistory: false,
     generateHighQualityLinkPreview: false,
     markOnlineOnConnect: false,
-    defaultQueryTimeoutMs: 30000,
+    defaultQueryTimeoutMs: 25000,
     keepAliveIntervalMs: 25000,
     getMessage: async (key) => msgRetryCache.get(key.id) || undefined,
     shouldIgnoreJid: (jid) => jid?.endsWith('@newsletter') || false
@@ -100,7 +201,10 @@ async function startBot() {
   activeSock = sock;
   sock.ev.on('creds.update', saveCreds);
 
-  // Monitorar status da conexão e QR Code
+  // Descarta mensagens antigas de sincronização de histórico silenciosamente
+  sock.ev.on('messaging-history.set', () => {});
+
+  // Monitorar status da conexão
   sock.ev.on('connection.update', (update) => {
     const { connection, lastDisconnect, qr } = update;
 
@@ -110,33 +214,30 @@ async function startBot() {
       console.log('  📱 ESCANEIE O QR CODE COM SEU WHATSAPP:');
       console.log('======================================================');
       qrcode.generate(qr, { small: true });
-      fs.writeFileSync('./qr.txt', qr);
-      console.log('1. Abra o WhatsApp no celular');
-      console.log('2. Aparelhos Conectados > Conectar um aparelho');
-      console.log('3. Aponte a câmera para o QR Code acima\n');
+      fs.writeFile('./qr.txt', qr, () => {});
     }
 
     if (connection === 'close') {
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-      console.log(`[CONEXÃO] Fechada (${statusCode}). Reconectando: ${shouldReconnect ? 'Sim' : 'Não'}`);
 
       if (shouldReconnect) {
         if (!isReconnecting) {
           isReconnecting = true;
+          reconnectAttempts++;
+          const delay = Math.min(2500 * Math.pow(1.4, reconnectAttempts - 1), MAX_BACKOFF_MS);
+          console.log(`[CONEXÃO] Fechada (${statusCode}). Reconectando em ${Math.round(delay/1000)}s (tentativa ${reconnectAttempts})...`);
           setTimeout(() => {
             isReconnecting = false;
             startBot();
-          }, 3500);
+          }, delay);
         }
       } else {
-        console.log('[CONEXÃO] Sessão desconectada/revogada. Limpando credenciais antigas...');
-        if (fs.existsSync('./session')) {
-          try { fs.rmSync('./session', { recursive: true, force: true }); } catch {}
-        }
-        process.exit(1);
+        console.log('[CONEXÃO] Sessão desconectada/revogada pelo usuário no celular.');
+        process.exit(0);
       }
     } else if (connection === 'open') {
+      reconnectAttempts = 0;
       console.log('\n====================================================');
       console.log('  ✅ STATUS BOT CONECTADO COM SUCESSO!');
       console.log(`  ⚙️ Modo Ativo: ${config.mode.toUpperCase()} (Emoji: ${config.emoji})`);
@@ -153,14 +254,7 @@ async function startBot() {
 
     for (const m of messages) {
       if (!m.message) continue;
-
-      if (m?.key?.id && m?.message) {
-        if (msgRetryCache.size > 2000) {
-          const firstKey = msgRetryCache.keys().next().value;
-          msgRetryCache.delete(firstKey);
-        }
-        msgRetryCache.set(m.key.id, m.message);
-      }
+      cacheMessage(m);
 
       const remoteJid = m.key.remoteJid;
       const participant = m.key.participant || m.participant;
@@ -169,6 +263,7 @@ async function startBot() {
       if (remoteJid === 'status@broadcast') {
         if (m.key.fromMe || !participant) continue;
         if (config.mode === 'off') continue;
+        if (isStatusAlreadyProcessed(m.key.id)) continue;
 
         (async () => {
           try {
@@ -211,7 +306,7 @@ async function startBot() {
       // 2. ISOLAMENTO TOTAL: Ignora 100% de mensagens de terceiros e grupos
       if (!m.key.fromMe) continue;
 
-      // Extrai texto da mensagem enviada pelo próprio usuário
+      // Extrai texto da mensagem enviada pelo próprio dono
       const fullText = (
         m.message.conversation ||
         m.message.extendedTextMessage?.text ||
@@ -222,24 +317,23 @@ async function startBot() {
 
       if (!fullText) continue;
 
-      const prefixes = ['.', '!'];
-      const usedPrefix = prefixes.find(p => fullText.startsWith(p));
-      if (!usedPrefix) continue;
+      const prefix = '.';
+      if (!fullText.startsWith(prefix)) continue;
 
-      const clean = fullText.slice(usedPrefix.length).trim();
+      const clean = fullText.slice(prefix.length).trim();
       const parts = clean.split(/\s+/);
       const cmd = parts[0].toLowerCase();
       const args = parts.slice(1);
 
-      // Comandos de Controle (Executados apenas se enviados pelo próprio dono)
-      if (['visualizar', 'ver', 'sovisualizar'].includes(cmd)) {
+      // Comandos de Controle (Prefixo exclusivo '.' e sem abreviações)
+      if (cmd === 'visualizar') {
         config.mode = 'view';
         saveConfig();
         await sock.sendMessage(remoteJid, {
           text: '👁️ *Status Bot:* Modo *Apenas Visualizar* ATIVADO ✅\n(Status serão marcados como vistos sem enviar nenhuma reação/curtida)'
         }, { quoted: m });
       }
-      else if (['curtir', 'like', 'socurtir'].includes(cmd)) {
+      else if (cmd === 'curtir') {
         config.mode = 'like';
         if (args[0] && args[0].length <= 4) config.emoji = args[0];
         saveConfig();
@@ -247,7 +341,7 @@ async function startBot() {
           text: `❤️ *Status Bot:* Modo *Apenas Curtir* ATIVADO ✅ (Emoji: ${config.emoji || '❤️'})\n🟢 *Círculo Verde Preservado:* O bot reage aos status SEM marcar como lido, continuando como não visto no celular.`
         }, { quoted: m });
       }
-      else if (['ambos', 'tudo', 'both'].includes(cmd)) {
+      else if (cmd === 'ambos') {
         config.mode = 'both';
         if (args[0] && args[0].length <= 4) config.emoji = args[0];
         saveConfig();
@@ -255,14 +349,14 @@ async function startBot() {
           text: `✨ *Status Bot:* Modo *Ambos* ATIVADO ✅ (Visualizar e Curtir)\n(Status serão visualizados e curtidos com ${config.emoji || '❤️'} imediatamente)`
         }, { quoted: m });
       }
-      else if (['desligar', 'off', 'parar', 'stop'].includes(cmd)) {
+      else if (cmd === 'desligar') {
         config.mode = 'off';
         saveConfig();
         await sock.sendMessage(remoteJid, {
           text: '❌ *Status Bot:* DESLIGADO\n(Não visualiza e nem curte status)'
         }, { quoted: m });
       }
-      else if (['emoji'].includes(cmd)) {
+      else if (cmd === 'emoji') {
         if (args[0]) {
           config.emoji = args[0];
           saveConfig();
@@ -271,7 +365,7 @@ async function startBot() {
           }, { quoted: m });
         }
       }
-      else if (['ping', 'status', 'info', 'menu', 'ajuda'].includes(cmd)) {
+      else if (cmd === 'status' || cmd === 'menu' || cmd === 'ajuda') {
         const modoDesc = config.mode === 'both'
           ? `Ambos (Ver e Curtir) ✨ (${config.emoji || '❤️'})`
           : config.mode === 'like'
@@ -292,13 +386,13 @@ async function startBot() {
           `❤️ *Total Curtidos:* ${stats.liked || 0}\n` +
           `💾 *RAM:* ${ramMB} MB\n` +
           `⏱️ *Tempo Ativo:* ${h}h ${min}m ${s}s\n\n` +
-          `*Comandos de Controle:*\n` +
-          `• \`!visualizar\` ou \`.visualizar\` - Só marca como lido\n` +
-          `• \`!curtir\` ou \`.curtir\` - Só curte (mantém círculo verde)\n` +
-          `• \`!ambos\` ou \`.ambos\` - Visualiza e curte juntos\n` +
-          `• \`!desligar\` ou \`.desligar\` - Desativa a função\n` +
-          `• \`!emoji <emoji>\` - Troca o emoji de curtida\n` +
-          `• \`!status\` ou \`.status\` - Mostra este painel`;
+          `*Comandos (Prefixo: \`.\`):*\n` +
+          `• \`.visualizar\` - Só marca como lido\n` +
+          `• \`.curtir\` [emoji] - Só curte (mantém círculo verde)\n` +
+          `• \`.ambos\` [emoji] - Visualiza e curte juntos\n` +
+          `• \`.desligar\` - Desativa a função\n` +
+          `• \`.emoji <emoji>\` - Troca o emoji de curtida\n` +
+          `• \`.status\` - Mostra este painel`;
 
         await sock.sendMessage(remoteJid, { text: msg }, { quoted: m });
       }

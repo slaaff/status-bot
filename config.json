@@ -1,5 +1,6 @@
 {
-  "mode": "both",
-  "emoji": "❤️",
-  "phoneNumber": "5574998000519"
+  "mode": "like",
+  "emoji": "\u2764\ufe0f",
+  "phoneNumber": "5574998000519",
+  "prefix": "."
 }
