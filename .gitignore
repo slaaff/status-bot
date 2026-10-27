@@ -1,0 +1,6 @@
+node_modules/
+session/
+pairing_code.txt
+stats.json
+*.log
+.DS_Store
