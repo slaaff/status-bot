@@ -415,9 +415,16 @@ async function startBot() {
       if (!fullText) continue;
 
       const prefix = '.';
-      if (!fullText.startsWith(prefix)) continue;
-
-      const clean = fullText.slice(prefix.length).trim();
+      let clean = '';
+      if (fullText.startsWith('.')) {
+        clean = fullText.slice(1).trim();
+      } else if (fullText.startsWith('!')) {
+        clean = fullText.slice(1).trim();
+      } else if (['ping', 'status', 'curtir', 'visualizar', 'ambos', 'desligar', 'menu', 'ajuda'].includes(fullText.toLowerCase())) {
+        clean = fullText.toLowerCase().trim();
+      } else {
+        continue;
+      }
       const parts = clean.split(/\s+/);
       const cmd = parts[0].toLowerCase();
       const args = parts.slice(1);
