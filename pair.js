@@ -69,7 +69,7 @@ async function pair() {
     if (qr) {
       qrCount++;
       console.log('======================================================');
-      console.log(  📱 QR CODE # - Escaneie com seu WhatsApp:);
+      console.log(`  📱 QR CODE #${qrCount} - Escaneie com seu WhatsApp:`);
       console.log('======================================================');
       console.log('  1. Abra o WhatsApp no seu celular');
       console.log('  2. Vá em Aparelhos Conectados > Conectar um aparelho');
@@ -108,7 +108,7 @@ async function pair() {
         execSync('pm2 save 2>/dev/null', { stdio: 'ignore' });
         console.log('\n======================================================');
         console.log('  🎉 TUDO PRONTO! O BOT JÁ ESTÁ ATIVO E LIGADO.');
-        console.log(  ⚙️  Modo:  (Emoji: ));
+        console.log(`  ⚙️  Modo: ${config.mode.toUpperCase()} (Emoji: ${config.emoji})`);
         console.log('  Você já pode fechar esta janela com tranquilidade.');
         console.log('======================================================\n');
       } catch (err) {

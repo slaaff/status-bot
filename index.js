@@ -60,18 +60,17 @@ function saveStats() {
   }, 2000);
 }
 
-// Cache de mensagens para prevenir erros de decodificação
+// Cache de mensagens para prevenir falhas de decodificação em retries
 const msgRetryCache = new Map();
 
 let isReconnecting = false;
-let currentSock = null;
 
 async function startBot() {
   config = loadConfig();
   stats = loadStats();
 
   const { state, saveCreds } = await useMultiFileAuthState('./session');
-  const { version, isLatest } = await fetchLatestBaileysVersion();
+  const { version } = await fetchLatestBaileysVersion();
 
   const sock = makeWASocket({
     version,
@@ -88,7 +87,6 @@ async function startBot() {
     shouldIgnoreJid: (jid) => jid?.endsWith('@newsletter') || false
   });
 
-  currentSock = sock;
   sock.ev.on('creds.update', saveCreds);
 
   // Monitorar status da conexão e QR Code
@@ -110,7 +108,7 @@ async function startBot() {
     if (connection === 'close') {
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-      console.log([CONEXÃO] Fechada (). Reconectando: );
+      console.log(`[CONEXÃO] Fechada (${statusCode}). Reconectando: ${shouldReconnect ? 'Sim' : 'Não'}`);
 
       if (shouldReconnect) {
         if (!isReconnecting) {
@@ -128,10 +126,10 @@ async function startBot() {
         process.exit(1);
       }
     } else if (connection === 'open') {
-      console.log('\n======================================================');
+      console.log('\n====================================================');
       console.log('  ✅ STATUS BOT CONECTADO COM SUCESSO!');
-      console.log(  ⚙️  Modo Ativo:  (Emoji: ));
-      console.log('======================================================\n');
+      console.log(`  ⚙️ Modo Ativo: ${config.mode.toUpperCase()} (Emoji: ${config.emoji})`);
+      console.log('====================================================\n');
       if (fs.existsSync('./qr.txt')) {
         try { fs.unlinkSync('./qr.txt'); } catch {}
       }
@@ -175,7 +173,7 @@ async function startBot() {
               await sock.readMessages([statusKey]);
               stats.viewed = (stats.viewed || 0) + 1;
               saveStats();
-              console.log([STATUS] Visualizado de + (Total: ));
+              console.log(`[STATUS] Visualizado de +${sender} (Total: ${stats.viewed})`);
             }
 
             // Modo Curtir ou Ambos -> reage no status
@@ -190,7 +188,7 @@ async function startBot() {
               });
               stats.liked = (stats.liked || 0) + 1;
               saveStats();
-              console.log([STATUS] Curtido com  de + (Total: ));
+              console.log(`[STATUS] Curtido com ${config.emoji || '❤️'} de +${sender}${config.mode === 'like' ? ' (Círculo verde mantido)' : ''} (Total: ${stats.liked})`);
             }
           } catch (err) {
             console.error('[STATUS ERRO]', err.message);
@@ -235,7 +233,7 @@ async function startBot() {
         if (args[0] && args[0].length <= 4) config.emoji = args[0];
         saveConfig();
         await sock.sendMessage(remoteJid, {
-          text: ❤️ *Status Bot:* Modo *Apenas Curtir* ATIVADO ✅ (Emoji: )\n🟢 *Círculo Verde Preservado:* O bot reage aos status SEM marcar como lido, continuando como não visto no celular.
+          text: `❤️ *Status Bot:* Modo *Apenas Curtir* ATIVADO ✅ (Emoji: ${config.emoji || '❤️'})\n🟢 *Círculo Verde Preservado:* O bot reage aos status SEM marcar como lido, continuando como não visto no celular.`
         }, { quoted: m });
       }
       else if (['ambos', 'tudo', 'both'].includes(cmd)) {
@@ -243,7 +241,7 @@ async function startBot() {
         if (args[0] && args[0].length <= 4) config.emoji = args[0];
         saveConfig();
         await sock.sendMessage(remoteJid, {
-          text: ✨ *Status Bot:* Modo *Ambos* ATIVADO ✅ (Visualizar e Curtir)\n(Status serão visualizados e curtidos com  imediatamente)
+          text: `✨ *Status Bot:* Modo *Ambos* ATIVADO ✅ (Visualizar e Curtir)\n(Status serão visualizados e curtidos com ${config.emoji || '❤️'} imediatamente)`
         }, { quoted: m });
       }
       else if (['desligar', 'off', 'parar', 'stop'].includes(cmd)) {
@@ -258,15 +256,15 @@ async function startBot() {
           config.emoji = args[0];
           saveConfig();
           await sock.sendMessage(remoteJid, {
-            text: 🎨 *Emoji de Reação Atualizado:* 
+            text: `🎨 *Emoji de Reação Atualizado:* ${config.emoji}`
           }, { quoted: m });
         }
       }
       else if (['ping', 'status', 'info', 'menu', 'ajuda'].includes(cmd)) {
         const modoDesc = config.mode === 'both'
-          ? Ambos (Ver e Curtir) ✨ ()
+          ? `Ambos (Ver e Curtir) ✨ (${config.emoji || '❤️'})`
           : config.mode === 'like'
-          ? Apenas Curtir 🟢 () (Círculo Verde Preservado)
+          ? `Apenas Curtir 🟢 (${config.emoji || '❤️'}) (Círculo Verde Preservado)`
           : config.mode === 'view'
           ? 'Apenas Visualizar 👁️'
           : 'Desligado ❌';
@@ -277,19 +275,19 @@ async function startBot() {
         const s = uptimeSeconds % 60;
         const ramMB = (process.memoryUsage().rss / (1024 * 1024)).toFixed(1);
 
-        const msg = ⚡ *STATUS BOT PESSOAL* ⚡\n\n +
-          ⚙️ *Modo Atual:* \n +
-          👁️ *Total Visualizados:* \n +
-          ❤️ *Total Curtidos:* \n +
-          💾 *RAM:*  MB\n +
-          ⏱️ *Tempo Ativo:* h m s\n\n +
-          *Comandos de Controle:*\n +
-          • \!visualizar\ ou \.visualizar\ - Só marca como lido\n +
-          • \!curtir\ ou \.curtir\ - Só curte (mantém círculo verde)\n +
-          • \!ambos\ ou \.ambos\ - Visualiza e curte juntos\n +
-          • \!desligar\ ou \.desligar\ - Desativa a função\n +
-          • \!emoji <emoji>\ - Troca o emoji de curtida\n +
-          • \!status\ ou \.status\ - Mostra este painel;
+        const msg = `⚡ *STATUS BOT PESSOAL* ⚡\n\n` +
+          `⚙️ *Modo Atual:* ${modoDesc}\n` +
+          `👁️ *Total Visualizados:* ${stats.viewed || 0}\n` +
+          `❤️ *Total Curtidos:* ${stats.liked || 0}\n` +
+          `💾 *RAM:* ${ramMB} MB\n` +
+          `⏱️ *Tempo Ativo:* ${h}h ${min}m ${s}s\n\n` +
+          `*Comandos de Controle:*\n` +
+          `• \`!visualizar\` ou \`.visualizar\` - Só marca como lido\n` +
+          `• \`!curtir\` ou \`.curtir\` - Só curte (mantém círculo verde)\n` +
+          `• \`!ambos\` ou \`.ambos\` - Visualiza e curte juntos\n` +
+          `• \`!desligar\` ou \`.desligar\` - Desativa a função\n` +
+          `• \`!emoji <emoji>\` - Troca o emoji de curtida\n` +
+          `• \`!status\` ou \`.status\` - Mostra este painel`;
 
         await sock.sendMessage(remoteJid, { text: msg }, { quoted: m });
       }
