@@ -13,12 +13,51 @@ import makeWASocket, {
   useMultiFileAuthState,
   DisconnectReason,
   fetchLatestBaileysVersion,
-  Browsers
+  Browsers,
+  proto
 } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import qrcode from 'qrcode-terminal';
 import fs from 'fs';
 import path from 'path';
+
+// Silencia logs internos verbosos do libsignal (dumps de chaves e ratchets que sobrecarregam CPU e disco)
+const origConsoleInfo = console.info;
+console.info = (...args) => {
+  if (typeof args[0] === 'string' && (
+    args[0].startsWith('Closing session') ||
+    args[0].startsWith('Opening session') ||
+    args[0].startsWith('Session already') ||
+    args[0].startsWith('Removing old closed session') ||
+    args[0].startsWith('Migrating session')
+  )) {
+    return;
+  }
+  origConsoleInfo(...args);
+};
+
+const origConsoleWarn = console.warn;
+console.warn = (...args) => {
+  if (typeof args[0] === 'string' && (
+    args[0].startsWith('Closing open session') ||
+    args[0].startsWith('Decrypted message with closed session') ||
+    args[0].startsWith('Session already')
+  )) {
+    return;
+  }
+  origConsoleWarn(...args);
+};
+
+const origConsoleError = console.error;
+console.error = (...args) => {
+  if (typeof args[0] === 'string' && (
+    args[0].startsWith('Failed to decrypt message') ||
+    args[0].startsWith('Session error:Error: Bad MAC')
+  )) {
+    return;
+  }
+  origConsoleError(...args);
+};
 
 const configPath = path.resolve('./config.json');
 const statsPath = path.resolve('./stats.json');
@@ -48,7 +87,7 @@ function saveConfig() {
 }
 
 function loadStats() {
-  const defaults = { viewed: 0, liked: 0 };
+  const defaults = { viewed: 0, liked: 0, totalViewsReceived: 0, viewsReceived: {} };
   try {
     if (fs.existsSync(statsPath)) {
       return { ...defaults, ...JSON.parse(fs.readFileSync(statsPath, 'utf8')) };
@@ -190,10 +229,15 @@ async function startBot() {
     auth: state,
     browser: Browsers.macOS('Desktop'),
     syncFullHistory: false,
+    shouldSyncHistoryMessage: (msg) => {
+      // Sincroniza apenas mapeamento de LIDs e contatos essenciais (evita loop de notificação no celular)
+      return msg.syncType === proto.HistorySync.HistorySyncType.INITIAL_BOOTSTRAP ||
+             msg.syncType === proto.HistorySync.HistorySyncType.PUSH_NAME;
+    },
     generateHighQualityLinkPreview: false,
     markOnlineOnConnect: false,
-    defaultQueryTimeoutMs: 25000,
-    keepAliveIntervalMs: 25000,
+    defaultQueryTimeoutMs: 60000,
+    keepAliveIntervalMs: 30000,
     getMessage: async (key) => msgRetryCache.get(key.id) || undefined,
     shouldIgnoreJid: (jid) => jid?.endsWith('@newsletter') || false
   });
@@ -203,6 +247,59 @@ async function startBot() {
 
   // Descarta mensagens antigas de sincronização de histórico silenciosamente
   sock.ev.on('messaging-history.set', () => {});
+
+  // Captura recibos de leitura (visualizações de status@broadcast)
+  sock.ev.on('message-receipt.update', async (receipts) => {
+    if (!Array.isArray(receipts)) return;
+    for (const item of receipts) {
+      if (item.key?.remoteJid === 'status@broadcast') {
+        const statusId = item.key.id;
+        const viewer = item.receipt?.userJid;
+        const isRead = !!item.receipt?.readTimestamp;
+
+        if (isRead && viewer) {
+          if (!stats.viewsReceived) stats.viewsReceived = {};
+          if (!stats.viewsReceived[statusId]) stats.viewsReceived[statusId] = [];
+
+          if (!stats.viewsReceived[statusId].includes(viewer)) {
+            stats.viewsReceived[statusId].push(viewer);
+            stats.totalViewsReceived = (stats.totalViewsReceived || 0) + 1;
+            saveStats();
+            const viewerNum = viewer.split('@')[0];
+            console.log(`[STATUS] Status visualizado por +${viewerNum} (Total recebidas: ${stats.totalViewsReceived})`);
+          }
+        }
+      }
+    }
+  });
+
+  // Captura atualizações de mensagens para status@broadcast (ex: recibos em lote)
+  sock.ev.on('messages.update', async (updates) => {
+    if (!Array.isArray(updates)) return;
+    for (const item of updates) {
+      if (item.key?.remoteJid === 'status@broadcast') {
+        const statusId = item.key.id;
+        const userReceipts = item.update?.userReceipt;
+        if (Array.isArray(userReceipts)) {
+          if (!stats.viewsReceived) stats.viewsReceived = {};
+          if (!stats.viewsReceived[statusId]) stats.viewsReceived[statusId] = [];
+
+          let changed = false;
+          for (const ur of userReceipts) {
+            if (ur.userJid && ur.readTimestamp && !stats.viewsReceived[statusId].includes(ur.userJid)) {
+              stats.viewsReceived[statusId].push(ur.userJid);
+              stats.totalViewsReceived = (stats.totalViewsReceived || 0) + 1;
+              changed = true;
+            }
+          }
+          if (changed) {
+            saveStats();
+            console.log(`[STATUS] Visualizações de status atualizadas (Total: ${stats.totalViewsReceived})`);
+          }
+        }
+      }
+    }
+  });
 
   // Monitorar status da conexão
   sock.ev.on('connection.update', (update) => {
@@ -383,6 +480,7 @@ async function startBot() {
         const msg = `⚡ *STATUS BOT PESSOAL* ⚡\n\n` +
           `⚙️ *Modo Atual:* ${modoDesc}\n` +
           `👁️ *Total Visualizados:* ${stats.viewed || 0}\n` +
+          `👀 *Views Recebidas (Status):* ${stats.totalViewsReceived || 0}\n` +
           `❤️ *Total Curtidos:* ${stats.liked || 0}\n` +
           `💾 *RAM:* ${ramMB} MB\n` +
           `⏱️ *Tempo Ativo:* ${h}h ${min}m ${s}s\n\n` +
