@@ -63,6 +63,7 @@ function saveStats() {
 // Cache de mensagens para prevenir falhas de decodificação em retries
 const msgRetryCache = new Map();
 
+let activeSock = null;
 let isReconnecting = false;
 
 async function startBot() {
@@ -72,12 +73,21 @@ async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState('./session');
   const { version } = await fetchLatestBaileysVersion();
 
+  // Limpa socket anterior se houver
+  if (activeSock) {
+    try {
+      activeSock.ev.removeAllListeners();
+      activeSock.ws?.close();
+    } catch {}
+    activeSock = null;
+  }
+
   const sock = makeWASocket({
     version,
     logger: pino({ level: 'silent' }),
     printQRInTerminal: false,
     auth: state,
-    browser: Browsers.ubuntu('Chrome'),
+    browser: Browsers.macOS('Desktop'),
     syncFullHistory: false,
     generateHighQualityLinkPreview: false,
     markOnlineOnConnect: false,
@@ -87,6 +97,7 @@ async function startBot() {
     shouldIgnoreJid: (jid) => jid?.endsWith('@newsletter') || false
   });
 
+  activeSock = sock;
   sock.ev.on('creds.update', saveCreds);
 
   // Monitorar status da conexão e QR Code
@@ -116,7 +127,7 @@ async function startBot() {
           setTimeout(() => {
             isReconnecting = false;
             startBot();
-          }, 4000);
+          }, 3500);
         }
       } else {
         console.log('[CONEXÃO] Sessão desconectada/revogada. Limpando credenciais antigas...');
