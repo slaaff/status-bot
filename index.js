@@ -65,11 +65,14 @@ function loadConfig() {
   const defaults = {
     mode: 'both', // 'view' | 'like' | 'both' | 'off'
     emoji: '❤️',
-    phoneNumber: '5574998000519'
+    phoneNumber: '5574998000519',
+    alwaysTypingChats: []
   };
   try {
     if (fs.existsSync(configPath)) {
-      return { ...defaults, ...JSON.parse(fs.readFileSync(configPath, 'utf8')) };
+      const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      if (!Array.isArray(parsed.alwaysTypingChats)) parsed.alwaysTypingChats = [];
+      return { ...defaults, ...parsed };
     }
   } catch {}
   return defaults;
@@ -84,6 +87,23 @@ function saveConfig() {
     saveConfigTimer = null;
   }, 1000);
 }
+
+// Loop de Sempre Digitando (Fake Typing contínuo para chats selecionados)
+let alwaysTypingInterval = null;
+function startAlwaysTypingLoop(sock) {
+  if (alwaysTypingInterval) clearInterval(alwaysTypingInterval);
+  alwaysTypingInterval = setInterval(async () => {
+    if (!sock?.ws?.isOpen) return;
+    if (!Array.isArray(config.alwaysTypingChats) || config.alwaysTypingChats.length === 0) return;
+
+    for (const jid of config.alwaysTypingChats) {
+      try {
+        await sock.sendPresenceUpdate('composing', jid);
+      } catch {}
+    }
+  }, 8000);
+}
+
 
 
 /**
@@ -269,6 +289,7 @@ async function startBot() {
       if (fs.existsSync('./qr.txt')) {
         try { fs.unlinkSync('./qr.txt'); } catch {}
       }
+      startAlwaysTypingLoop(sock);
     }
   });
 
@@ -392,6 +413,66 @@ async function startBot() {
           }, { quoted: m });
         }
       }
+      else if (cmd === 'digitando') {
+        if (!Array.isArray(config.alwaysTypingChats)) {
+          config.alwaysTypingChats = [];
+        }
+
+        const subCmd = (args[0] || '').toLowerCase();
+
+        // Listar chats com digitando ativo
+        if (subCmd === 'list' || subCmd === 'lista') {
+          if (config.alwaysTypingChats.length === 0) {
+            await sock.sendMessage(remoteJid, {
+              text: '✍️ *Sempre Digitando:* Nenhum chat ativo no momento.\nEnvie `.digitando` na conversa desejada para ativar.'
+            }, { quoted: m });
+          } else {
+            const listText = config.alwaysTypingChats.map(c => `• ${c.split('@')[0]}`).join('\n');
+            await sock.sendMessage(remoteJid, {
+              text: `✍️ *Chats com "Sempre Digitando" Ativo (${config.alwaysTypingChats.length}):*\n\n${listText}\n\n_Para desativar, envie \`.digitando off\` na conversa._`
+            }, { quoted: m });
+          }
+          return;
+        }
+
+        // Se passar um número como argumento (ex: .digitando 557499999999), usa ele; senão usa o chat atual
+        let targetJid = remoteJid;
+        const potentialPhone = (args[0] || '').replace(/\D/g, '');
+        if (potentialPhone.length >= 10 && potentialPhone.length <= 15) {
+          targetJid = `${potentialPhone}@s.whatsapp.net`;
+        }
+
+        const isCurrentlyActive = config.alwaysTypingChats.includes(targetJid);
+        let shouldActivate = !isCurrentlyActive;
+
+        if (['on', '1', 'ativar', 'sim', 'true'].includes(subCmd)) {
+          shouldActivate = true;
+        } else if (['off', '0', 'desativar', 'nao', 'não', 'false'].includes(subCmd)) {
+          shouldActivate = false;
+        }
+
+        if (shouldActivate) {
+          if (!config.alwaysTypingChats.includes(targetJid)) {
+            config.alwaysTypingChats.push(targetJid);
+          }
+          saveConfig();
+          try {
+            await sock.sendPresenceUpdate('composing', targetJid);
+          } catch {}
+          await sock.sendMessage(remoteJid, {
+            text: `✍️ *Sempre Digitando:* ATIVADO ✅\nChat: \`${targetJid.split('@')[0]}\`\n(Você aparecerá continuamente como "Digitando..." neste chat)`
+          }, { quoted: m });
+        } else {
+          config.alwaysTypingChats = config.alwaysTypingChats.filter(c => c !== targetJid);
+          saveConfig();
+          try {
+            await sock.sendPresenceUpdate('paused', targetJid);
+          } catch {}
+          await sock.sendMessage(remoteJid, {
+            text: `⏸️ *Sempre Digitando:* DESATIVADO ❌\nChat: \`${targetJid.split('@')[0]}\`\n(Você não aparece mais digitando neste chat)`
+          }, { quoted: m });
+        }
+      }
       else if (cmd === 'status' || cmd === 'menu' || cmd === 'ajuda') {
         const modoDesc = config.mode === 'both'
           ? `Ambos (Ver e Curtir) ✨ (${config.emoji || '❤️'})`
@@ -409,6 +490,7 @@ async function startBot() {
 
         const msg = `⚡ *STATUS BOT PESSOAL* ⚡\n\n` +
           `⚙️ *Modo Atual:* ${modoDesc}\n` +
+          `✍️ *Sempre Digitando:* ${config.alwaysTypingChats?.length || 0} chat(s) ativo(s)\n` +
           `💾 *RAM:* ${ramMB} MB\n` +
           `⏱️ *Tempo Ativo:* ${h}h ${min}m ${s}s\n\n` +
           `*Comandos (Prefixo: \`.\`):*\n` +
