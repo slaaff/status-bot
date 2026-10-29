@@ -9,3 +9,4 @@ stats.json
 *.old*
 .yarn/
 .yarnrc.yml
+stats.json
