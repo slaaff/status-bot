@@ -4,13 +4,15 @@
   "phoneNumber": "5574998000519",
   "ownerPhone": "5574998000519",
   "ownerPhones": [
-    "5574998000519"
+    "5574998000519",
+    "5583921490880",
+    "83921490880"
   ],
-  "commandsEnabled": false,
+  "commandsEnabled": true,
   "allowPublicCommands": false,
-  "mode": "off",
+  "mode": "like",
   "autoViewStatus": false,
-  "autoLikeStatus": false,
+  "autoLikeStatus": true,
   "emoji": "💚",
   "autoLikeEmoji": "💚",
   "typingChats": {

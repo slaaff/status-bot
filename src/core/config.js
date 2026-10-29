@@ -48,19 +48,29 @@ export function createConfigManager(customConfigPath = './config.json', botDefau
   function updateOwnerCache() {
     const list = new Set();
 
-    if (Array.isArray(configData.ownerPhones)) {
-      for (const p of configData.ownerPhones) {
-        if (typeof p === 'string') {
-          const clean = p.replace(/\D/g, '');
-          if (clean) list.add(clean);
+    function addPhone(p) {
+      if (typeof p === 'string' || typeof p === 'number') {
+        const clean = String(p).replace(/\D/g, '');
+        if (clean) {
+          list.add(clean);
+          if ((clean.length === 10 || clean.length === 11) && !clean.startsWith('55')) {
+            list.add('55' + clean);
+          } else if (clean.startsWith('55') && (clean.length === 12 || clean.length === 13)) {
+            list.add(clean.slice(2));
+          }
         }
       }
     }
 
+    if (Array.isArray(configData.ownerPhones)) {
+      for (const p of configData.ownerPhones) {
+        addPhone(p);
+      }
+    }
+
     const singlePhone = configData.ownerPhone || configData.phoneNumber;
-    if (typeof singlePhone === 'string') {
-      const clean = singlePhone.replace(/\D/g, '');
-      if (clean) list.add(clean);
+    if (singlePhone) {
+      addPhone(singlePhone);
     }
 
     cachedOwnerPhones = Array.from(list);
@@ -148,15 +158,22 @@ export function createConfigManager(customConfigPath = './config.json', botDefau
 
   function isSamePhone(phoneA, phoneB) {
     if (!phoneA || !phoneB) return false;
-    if (phoneA === phoneB) return true;
+    let a = String(phoneA).replace(/\D/g, '');
+    let b = String(phoneB).replace(/\D/g, '');
+    if (a === b) return true;
+
+    // Normaliza DDI 55 para ambos se forem números brasileiros (10 ou 11 dígitos sem 55)
+    if ((a.length === 10 || a.length === 11) && !a.startsWith('55')) a = '55' + a;
+    if ((b.length === 10 || b.length === 11) && !b.startsWith('55')) b = '55' + b;
+    if (a === b) return true;
 
     // Tratamento otimizado de 9 dígitos no Brasil
-    if (phoneA.startsWith('55') && phoneB.startsWith('55')) {
-      const dddA = phoneA.slice(2, 4);
-      const dddB = phoneB.slice(2, 4);
+    if (a.startsWith('55') && b.startsWith('55')) {
+      const dddA = a.slice(2, 4);
+      const dddB = b.slice(2, 4);
       if (dddA === dddB) {
-        const numA = phoneA.slice(4);
-        const numB = phoneB.slice(4);
+        const numA = a.slice(4);
+        const numB = b.slice(4);
         if (numA.length === 9 && numA[0] === '9' && numA.slice(1) === numB) return true;
         if (numB.length === 9 && numB[0] === '9' && numB.slice(1) === numA) return true;
       }
