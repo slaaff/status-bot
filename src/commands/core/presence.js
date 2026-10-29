@@ -25,6 +25,39 @@ export function registerPresenceCommands(dispatcher, presenceHandler) {
     return `+${jid.split('@')[0]}`;
   }
 
+  function resolveChatTarget(query, activeChats, currentJid) {
+    const jids = Object.keys(activeChats);
+    if (!query) {
+      // Se não passou query:
+      // Se o chat atual está na lista, usa ele
+      if (activeChats[currentJid]) return currentJid;
+      // Se há exatamente 1 chat ativo em todo o bot, usa esse chat automaticamente
+      if (jids.length === 1) return jids[0];
+      return null;
+    }
+
+    const clean = query.toLowerCase().trim();
+
+    // 1. Número da lista (ex: "1" para o primeiro da lista)
+    const num = parseInt(clean, 10);
+    if (!isNaN(num) && num >= 1 && num <= jids.length) {
+      return jids[num - 1];
+    }
+
+    // 2. JID exato ou parcial
+    for (const jid of jids) {
+      if (jid.toLowerCase() === clean || jid.includes(clean)) return jid;
+    }
+
+    // 3. Nome do chat (ex: "bike", "01", etc.)
+    for (const [jid, info] of Object.entries(activeChats)) {
+      const name = (typeof info === 'object' ? info?.name : '') || '';
+      if (name.toLowerCase().includes(clean)) return jid;
+    }
+
+    return null;
+  }
+
   dispatcher.registerCommand({
     name: 'digita',
     aliases: presenceAliases,
@@ -35,7 +68,7 @@ export function registerPresenceCommands(dispatcher, presenceHandler) {
       const subcmd = (args[0] || '').toLowerCase();
       const extra = (args[1] || '').toLowerCase();
 
-      // 1. Reset geral de todos os chats (.reset, .digita reset, .digita off all)
+      // 1. Reset geral de todos os chats (.reset, .digita reset, .digita off all, .parar all)
       const isResetAll = ['reset', 'resetar', 'desativardigita', 'limpardigita'].includes(command) ||
                          (['off', '0', 'desativar', 'parar', 'stop', 'reset', 'limpar'].includes(subcmd) && ['all', 'todos', 'tudo'].includes(extra)) ||
                          (['off', '0', 'desativar', 'parar', 'stop', 'reset', 'limpar'].includes(command) && ['all', 'todos', 'tudo'].includes(subcmd)) ||
@@ -50,8 +83,9 @@ export function registerPresenceCommands(dispatcher, presenceHandler) {
         return;
       }
 
-      // 2. Listar onde a presença fake está ativa (.digita lista)
-      if (['lista', 'list', 'status', 'chats', 'ativos', 'onde'].includes(subcmd)) {
+      // 2. Listar onde a presença fake está ativa (.digita lista, .presenca)
+      if (['lista', 'list', 'status', 'chats', 'ativos', 'onde'].includes(subcmd) ||
+          (['presenca', 'presença'].includes(command) && !subcmd)) {
         const activeChats = presenceHandler.getTypingChats();
         const activeJids = Object.keys(activeChats);
 
@@ -80,23 +114,55 @@ export function registerPresenceCommands(dispatcher, presenceHandler) {
 
           listText += `${i + 1}. *${name}*\n   • Modo: ${modeDesc}\n   • Tipo: ${jid.endsWith('@g.us') ? '👥 Grupo' : '👤 Privado'}\n   • JID: \`${jid}\`\n\n`;
         }
+        listText += `💡 Para desativar: \`${prefix}parar <número ou nome>\` ou \`${prefix}reset\` para parar todos.`;
 
         await ctx.reply(listText.trim());
         return;
       }
 
-      // 3. Desativar explicitamente no chat atual (.parar, .digita off)
+      // 3. Desativar explicitamente (.parar, .stop, .digita off, .digita parar bike, .parar bike)
       const isExplicitOff = ['parar', 'stop'].includes(command) ||
-                            ['off', '0', 'desativar', 'parar', 'stop', 'nao', 'não', 'false'].includes(subcmd);
+                            ['off', '0', 'desativar', 'parar', 'stop', 'nao', 'não', 'false'].includes(subcmd) ||
+                            ['off', '0', 'desativar', 'parar', 'stop'].includes(extra);
 
       if (isExplicitOff) {
         const activeChats = presenceHandler.getTypingChats();
-        if (activeChats[remoteJid]) {
-          await presenceHandler.removeChatPresence(remoteJid);
-          await ctx.reply('⏹️ *Presença Fake Parada:* Desativada com sucesso neste chat.');
-        } else {
-          await ctx.reply('ℹ️ A presença fake já não estava ativa neste chat.');
+        const activeJids = Object.keys(activeChats);
+
+        if (activeJids.length === 0) {
+          await ctx.reply('ℹ️ A presença fake já está completamente desativada em todos os chats.');
+          return;
         }
+
+        // Determinar query de busca do chat alvo
+        let targetQuery = '';
+        if (['parar', 'stop'].includes(command)) {
+          targetQuery = args.join(' ').trim();
+        } else if (['off', '0', 'desativar', 'parar', 'stop', 'nao', 'não', 'false'].includes(subcmd)) {
+          targetQuery = args.slice(1).join(' ').trim();
+        } else if (['off', '0', 'desativar', 'parar', 'stop'].includes(extra)) {
+          targetQuery = subcmd;
+        }
+
+        const targetJid = resolveChatTarget(targetQuery, activeChats, remoteJid);
+
+        if (!targetJid) {
+          // Se não encontrou e há múltiplos chats, lista as opções
+          let msg = `⚠️ *Especifique qual chat deseja parar:*\n\n`;
+          let idx = 1;
+          for (const [jid, info] of Object.entries(activeChats)) {
+            const name = (typeof info === 'object' && info?.name) ? info.name : jid;
+            msg += `${idx++}. *${name}* (\`${jid}\`)\n`;
+          }
+          msg += `\nUse: \`${prefix}parar <número ou nome>\` ou \`${prefix}reset\` para parar todos.`;
+          await ctx.reply(msg.trim());
+          return;
+        }
+
+        const chatInfo = activeChats[targetJid];
+        const chatName = (typeof chatInfo === 'object' && chatInfo?.name) ? chatInfo.name : targetJid;
+        await presenceHandler.removeChatPresence(targetJid);
+        await ctx.reply(`⏹️ *Presença Fake Desativada!*\n\nChat: *${chatName}*\nStatus: Pausado e removido com sucesso.`);
         return;
       }
 

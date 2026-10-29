@@ -15,12 +15,6 @@
   "autoLikeStatus": true,
   "emoji": "💚",
   "autoLikeEmoji": "💚",
-  "typingChats": {
-    "120363404595861671@g.us": {
-      "mode": "recording",
-      "name": "Os 01 dos bike de jp",
-      "updatedAt": 1793237163951
-    }
-  },
+  "typingChats": {},
   "alwaysTypingChats": []
 }
