@@ -2,7 +2,7 @@
  * Gerenciador centralizado de configurações
  * - Carregamento seguro com valores padrão
  * - Gravação debounced com flush garantido no encerramento do processo
- * - Normalização e verificação de números de donos (compatível com 8 e 9 dígitos no Brasil)
+ * - Cache de telefones normalizados para latência ultra-baixa
  * - Sincronização automática entre modos de status (mode <-> autoViewStatus/autoLikeStatus)
  */
 
@@ -18,15 +18,16 @@ export function createConfigManager(customConfigPath = './config.json', botDefau
     prefix: '.',
     ownerPhone: '5574998000519',
     ownerPhones: ['5574998000519'],
-    mode: 'both', // 'view' | 'like' | 'both' | 'off'
+    commandsEnabled: false, // Inicia desativado por padrão
+    allowPublicCommands: false, // Inicia desativado pro público por padrão
+    mode: 'off', // 'view' | 'like' | 'both' | 'off'
     emoji: '❤️',
-    autoViewStatus: true,
-    autoLikeStatus: true,
+    autoViewStatus: false,
+    autoLikeStatus: false,
     autoLikeEmoji: '❤️',
-    autoDownload: true,
-    autoDeleteWord: true,
-    autoAnimeNotify: true,
-    allowPublicCommands: false,
+    autoDownload: false,
+    autoDeleteWord: false,
+    autoAnimeNotify: false,
     typingChats: {},
     alwaysTypingChats: [],
     stickerPack: 'WhatsApp Bot',
@@ -40,8 +41,33 @@ export function createConfigManager(customConfigPath = './config.json', botDefau
   let saveTimer = null;
   let isDirty = false;
 
+  // Cache em memória de telefones normalizados para validação em O(1)
+  let cachedOwnerPhones = [];
+  let cachedOwnerSet = new Set();
+
+  function updateOwnerCache() {
+    const list = new Set();
+
+    if (Array.isArray(configData.ownerPhones)) {
+      for (const p of configData.ownerPhones) {
+        if (typeof p === 'string') {
+          const clean = p.replace(/\D/g, '');
+          if (clean) list.add(clean);
+        }
+      }
+    }
+
+    const singlePhone = configData.ownerPhone || configData.phoneNumber;
+    if (typeof singlePhone === 'string') {
+      const clean = singlePhone.replace(/\D/g, '');
+      if (clean) list.add(clean);
+    }
+
+    cachedOwnerPhones = Array.from(list);
+    cachedOwnerSet = new Set(cachedOwnerPhones);
+  }
+
   function syncStatusModes(cfg) {
-    // Sincroniza 'mode' com 'autoViewStatus' e 'autoLikeStatus'
     if (cfg.mode) {
       if (cfg.mode === 'both') {
         cfg.autoViewStatus = true;
@@ -63,7 +89,6 @@ export function createConfigManager(customConfigPath = './config.json', botDefau
       else cfg.mode = 'off';
     }
 
-    // Sincroniza emoji
     if (cfg.emoji && (!cfg.autoLikeEmoji || cfg.emoji !== cfg.autoLikeEmoji)) {
       cfg.autoLikeEmoji = cfg.emoji;
     } else if (cfg.autoLikeEmoji && (!cfg.emoji || cfg.autoLikeEmoji !== cfg.emoji)) {
@@ -87,6 +112,7 @@ export function createConfigManager(customConfigPath = './config.json', botDefau
     }
 
     syncStatusModes(configData);
+    updateOwnerCache();
     return configData;
   }
 
@@ -108,6 +134,7 @@ export function createConfigManager(customConfigPath = './config.json', botDefau
     if (newFields && typeof newFields === 'object') {
       Object.assign(configData, newFields);
       syncStatusModes(configData);
+      updateOwnerCache();
     }
     isDirty = true;
 
@@ -119,42 +146,19 @@ export function createConfigManager(customConfigPath = './config.json', botDefau
     }
   }
 
-  function getOwnerPhones() {
-    const list = new Set();
-
-    if (Array.isArray(configData.ownerPhones)) {
-      for (const p of configData.ownerPhones) {
-        if (typeof p === 'string') {
-          const clean = p.replace(/\D/g, '');
-          if (clean) list.add(clean);
-        }
-      }
-    }
-
-    const singlePhone = configData.ownerPhone || configData.phoneNumber;
-    if (typeof singlePhone === 'string') {
-      const clean = singlePhone.replace(/\D/g, '');
-      if (clean) list.add(clean);
-    }
-
-    return Array.from(list);
-  }
-
   function isSamePhone(phoneA, phoneB) {
     if (!phoneA || !phoneB) return false;
-    const a = String(phoneA).replace(/\D/g, '');
-    const b = String(phoneB).replace(/\D/g, '');
-    if (a === b) return true;
+    if (phoneA === phoneB) return true;
 
-    // Tratamento para 9º dígito no Brasil (+55 DDD 9XXXX-XXXX vs +55 DDD XXXX-XXXX)
-    if (a.startsWith('55') && b.startsWith('55')) {
-      const dddA = a.slice(2, 4);
-      const dddB = b.slice(2, 4);
+    // Tratamento otimizado de 9 dígitos no Brasil
+    if (phoneA.startsWith('55') && phoneB.startsWith('55')) {
+      const dddA = phoneA.slice(2, 4);
+      const dddB = phoneB.slice(2, 4);
       if (dddA === dddB) {
-        const numA = a.slice(4);
-        const numB = b.slice(4);
-        if (numA.length === 9 && numA.startsWith('9') && numA.slice(1) === numB) return true;
-        if (numB.length === 9 && numB.startsWith('9') && numB.slice(1) === numA) return true;
+        const numA = phoneA.slice(4);
+        const numB = phoneB.slice(4);
+        if (numA.length === 9 && numA[0] === '9' && numA.slice(1) === numB) return true;
+        if (numB.length === 9 && numB[0] === '9' && numB.slice(1) === numA) return true;
       }
     }
     return false;
@@ -165,25 +169,27 @@ export function createConfigManager(customConfigPath = './config.json', botDefau
     const cleanSender = String(senderJidOrNum).split('@')[0].split(':')[0].replace(/\D/g, '');
     if (!cleanSender) return false;
 
-    // Compara com o próprio bot conectado (LID ou fone)
+    // Validação direta via Set O(1)
+    if (cachedOwnerSet.has(cleanSender)) return true;
+
+    // Compara com o próprio bot conectado (LID ou telefone)
     if (sockUser?.id) {
       const botNum = sockUser.id.split('@')[0].split(':')[0].replace(/\D/g, '');
-      if (isSamePhone(cleanSender, botNum)) return true;
+      if (cleanSender === botNum || isSamePhone(cleanSender, botNum)) return true;
     }
     if (sockUser?.lid) {
       const botLid = sockUser.lid.split('@')[0].split(':')[0].replace(/\D/g, '');
       if (cleanSender === botLid) return true;
     }
 
-    const owners = getOwnerPhones();
-    for (const owner of owners) {
+    // Validação com tolerância a 9 dígitos
+    for (const owner of cachedOwnerPhones) {
       if (isSamePhone(cleanSender, owner)) return true;
     }
 
     return false;
   }
 
-  // Registra flush automático no encerramento
   process.on('exit', flush);
   process.on('SIGINT', () => { flush(); process.exit(0); });
   process.on('SIGTERM', () => { flush(); process.exit(0); });
@@ -195,7 +201,7 @@ export function createConfigManager(customConfigPath = './config.json', botDefau
     save,
     flush,
     reload: load,
-    getOwnerPhones,
+    getOwnerPhones: () => cachedOwnerPhones,
     isOwner,
     isSamePhone
   };

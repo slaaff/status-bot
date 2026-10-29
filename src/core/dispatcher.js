@@ -1,7 +1,9 @@
 /**
- * Despachante Modular de Comandos e Eventos de Mensagem
- * Substitui escadas gigantescas de if/else por registro modular limpo,
- * permissões declarativas e contexto padronizado (ctx).
+ * Despachante Modular e Otimizado de Comandos
+ * - Roteamento estrito de prefixo (! para whatsapp-bot, . para status-bot)
+ * - Trava mestre de ativação/desativação geral de comandos (.bot on/off / .ativar)
+ * - Trava de ativação/desativação pública (.publico on/off)
+ * - Execução ultra-rápida e não-bloqueante
  */
 
 import { logger } from './logger.js';
@@ -15,7 +17,7 @@ export function createDispatcher(options) {
 
   function registerCommand(cmdDef) {
     if (!cmdDef.name || typeof cmdDef.execute !== 'function') {
-      throw new Error(`Comando inválido registrado: ${JSON.stringify(cmdDef)}`);
+      throw new Error(`Comando inválido: ${JSON.stringify(cmdDef)}`);
     }
 
     const name = cmdDef.name.toLowerCase();
@@ -65,15 +67,17 @@ export function createDispatcher(options) {
     const remoteJid = m.key.remoteJid;
     if (!remoteJid) return;
 
+    const fullText = extractMessageText(m);
+    const config = configManager.get();
+
+    // 1. Prefixo Estrito (WhatsApp bot: estritamente '!', Status bot: estritamente '.')
+    const strictPrefix = config.prefix || '.';
+    const isCommand = fullText.startsWith(strictPrefix);
+
     const isGroup = remoteJid.endsWith('@g.us');
     const participant = m.key.participant || (isGroup ? '' : remoteJid);
     const sender = participant || remoteJid;
-    const senderNum = sender.split('@')[0].split(':')[0].replace(/\D/g, '');
-
-    const config = configManager.get();
     const isFromOwner = m.key.fromMe || configManager.isOwner(sender, sock.user);
-
-    const fullText = extractMessageText(m);
 
     // Contexto enriquecido para os handlers
     const ctx = {
@@ -83,7 +87,7 @@ export function createDispatcher(options) {
       isGroup,
       participant,
       sender,
-      senderNum,
+      senderNum: sender.split('@')[0].split(':')[0].replace(/\D/g, ''),
       isFromOwner,
       fullText,
       config,
@@ -100,47 +104,60 @@ export function createDispatcher(options) {
       }
     };
 
-    // 1. Executa hooks passivos (ex: detecção de links, auto-delete, seguranças de grupo)
-    for (const hook of passiveHooks) {
-      try {
-        const handled = await hook(ctx);
-        if (handled === true) return; // Se o hook tratou a mensagem completamente, interrompe
-      } catch (err) {
-        logger.error('HOOK', `Erro no hook passivo: ${err.message}`, err);
+    // 2. Se NÃO for comando com prefixo estrito, avalia hooks passivos apenas se permitido
+    if (!isCommand) {
+      // Se comandos/bot estiverem desativados e não for dono, não processa hooks passivos
+      if (config.commandsEnabled === false && !isFromOwner) return;
+
+      for (const hook of passiveHooks) {
+        try {
+          const handled = await hook(ctx);
+          if (handled === true) return;
+        } catch (err) {
+          logger.error('HOOK', `Erro no hook passivo: ${err.message}`);
+        }
       }
+      return;
     }
 
-    if (!fullText) return;
+    // 3. Processamento Estrito do Comando
+    const cleanText = fullText.slice(strictPrefix.length).trim();
+    if (!cleanText) return;
 
-    // 2. Verificação de Prefixo
-    const primaryPrefix = config.prefix || '.';
-    const allowedPrefixes = [primaryPrefix];
-    // Aceita tanto '.' quanto '!' para garantir conveniência entre ambos os bots se permitido
-    if (primaryPrefix === '.') allowedPrefixes.push('!');
-    else if (primaryPrefix === '!') allowedPrefixes.push('.');
-
-    const usedPrefix = allowedPrefixes.find(p => fullText.startsWith(p));
-    if (!usedPrefix) return;
-
-    const cleanText = fullText.slice(usedPrefix.length).trim();
-    const parts = cleanText.split(/\s+/);
-    const commandName = parts[0]?.toLowerCase();
-    const args = parts.slice(1);
-    const argText = cleanText.slice(commandName.length).trim();
+    const spaceIndex = cleanText.indexOf(' ');
+    const commandName = (spaceIndex === -1 ? cleanText : cleanText.slice(0, spaceIndex)).toLowerCase();
+    const argText = spaceIndex === -1 ? '' : cleanText.slice(spaceIndex + 1).trim();
+    const args = argText ? argText.split(/\s+/) : [];
 
     const resolvedName = aliases.get(commandName) || commandName;
     const cmdDef = commands.get(resolvedName);
 
     if (!cmdDef) return;
 
-    // 3. Validação de Permissões
-    if (cmdDef.ownerOnly && !isFromOwner) {
-      if (!isGroup) {
-        await ctx.reply('🔒 *Comando restrito:* Apenas o dono do bot pode utilizar este comando.');
+    // 4. Trava Mestre: Comandos Ativados/Desativados
+    // Comandos de ativação mestre (.bot, .ativar, .comandos) são sempre permitidos para o dono
+    const isActivationCmd = ['bot', 'ativar', 'desativar', 'comandos', 'publico'].includes(resolvedName);
+    if (config.commandsEnabled === false && !isActivationCmd) {
+      if (isFromOwner) {
+        await ctx.reply(
+          `⚠️ *Comandos Desativados!*\n\nEnvie \`${strictPrefix}bot on\` ou \`${strictPrefix}ativar\` para ligar todos os comandos.`
+        );
       }
       return;
     }
 
+    // 5. Trava do Público: Ativação/Desativação pro público
+    if (!isFromOwner) {
+      if (!config.allowPublicCommands) {
+        // Se desativado pro público, ignora silenciosamente requisições de outros
+        return;
+      }
+      if (cmdDef.ownerOnly) {
+        return;
+      }
+    }
+
+    // 6. Validação de Escopo (Grupo vs Privado)
     if (cmdDef.groupOnly && !isGroup) {
       await ctx.reply('⚠️ Este comando só pode ser utilizado em grupos.');
       return;
@@ -151,26 +168,20 @@ export function createDispatcher(options) {
       return;
     }
 
-    // Se for grupo, não for dono e comandos públicos estiverem desativados, ignora
-    if (isGroup && !isFromOwner && !config.allowPublicCommands) {
-      return;
-    }
-
-    // Adiciona parâmetros do comando ao ctx
-    ctx.prefix = usedPrefix;
+    ctx.prefix = strictPrefix;
     ctx.command = commandName;
     ctx.canonicalCommand = resolvedName;
     ctx.args = args;
     ctx.argText = argText;
 
-    logger.info('COMANDO', `${usedPrefix}${commandName} de +${senderNum} ${isFromOwner ? '[DONO]' : ''}`);
+    logger.info('COMANDO', `${strictPrefix}${commandName} de +${ctx.senderNum} ${isFromOwner ? '[DONO]' : '[PÚBLICO]'}`);
 
     try {
       await cmdDef.execute(ctx);
     } catch (err) {
-      logger.error('COMANDO', `Erro ao executar ${commandName}: ${err.message}`, err);
+      logger.error('COMANDO', `Erro ao executar ${commandName}: ${err.message}`);
       try {
-        await ctx.reply(`⚠️ Ocorreu um erro ao processar o comando: ${err.message}`);
+        await ctx.reply(`⚠️ Erro ao processar comando: ${err.message}`);
       } catch {}
     }
   }

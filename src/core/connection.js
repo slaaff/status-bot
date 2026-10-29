@@ -82,7 +82,9 @@ export function createWhatsAppConnection(options) {
       generateHighQualityLinkPreview: false,
       markOnlineOnConnect: false,
       defaultQueryTimeoutMs: 60000,
-      keepAliveIntervalMs: 30000,
+      keepAliveIntervalMs: 25000,
+      connectTimeoutMs: 30000,
+      fireInitQueries: true,
       getMessage: async (key) => msgRetryCache.get(key.id) || undefined,
       shouldIgnoreJid: (jid) => jid?.endsWith('@newsletter') || false
     });

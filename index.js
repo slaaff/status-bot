@@ -55,16 +55,18 @@ async function main() {
       presenceHandler.stop();
     },
 
-    onMessage: async (messages, sock) => {
+    onMessage: (messages, sock) => {
       for (const m of messages) {
-        // 1. Processamento prioritário de Status (Stories)
         if (m.key.remoteJid === 'status@broadcast') {
-          await statusHandler.handleStatusMessage(m, sock);
+          statusHandler.handleStatusMessage(m, sock).catch(err => {
+            logger.error('STATUS', `Erro no status: ${err.message}`);
+          });
           continue;
         }
 
-        // 2. Comandos (Isolamento total: ignora terceiros se não for dono ou fromMe)
-        await dispatcher.handleMessage(m, sock);
+        dispatcher.handleMessage(m, sock).catch(err => {
+          logger.error('DISPATCHER', `Erro no comando: ${err.message}`);
+        });
       }
     },
 

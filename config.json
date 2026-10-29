@@ -1,7 +1,18 @@
 {
-  "mode": "like",
-  "emoji": "💚",
+  "botName": "Status Bot Pessoal",
+  "prefix": ".",
   "phoneNumber": "5574998000519",
+  "ownerPhone": "5574998000519",
+  "ownerPhones": [
+    "5574998000519"
+  ],
+  "commandsEnabled": false,
+  "allowPublicCommands": false,
+  "mode": "off",
+  "autoViewStatus": false,
+  "autoLikeStatus": false,
+  "emoji": "💚",
+  "autoLikeEmoji": "💚",
   "typingChats": {
     "120363404595861671@g.us": {
       "mode": "recording",
@@ -9,6 +20,5 @@
       "updatedAt": 1793237163951
     }
   },
-  "alwaysTypingChats": [],
-  "prefix": "."
+  "alwaysTypingChats": []
 }

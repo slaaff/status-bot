@@ -7,10 +7,12 @@ import { registerPresenceCommands } from './presence.js';
 import { registerStatusCommand } from './status.js';
 import { registerRestartCommand } from './restart.js';
 import { registerPingCommand } from './ping.js';
+import { registerBotControlCommands } from './botControl.js';
 
 export function registerCoreCommands(dispatcher, options = {}) {
   const { presenceHandler, isFullBot = false } = options;
 
+  registerBotControlCommands(dispatcher);
   registerStatusControlCommands(dispatcher);
   if (presenceHandler) {
     registerPresenceCommands(dispatcher, presenceHandler);

@@ -9,7 +9,7 @@ export function registerStatusCommand(dispatcher, options = {}) {
   dispatcher.registerCommand({
     name: 'status',
     aliases: ['st'],
-    ownerOnly: true,
+    ownerOnly: false,
     description: 'Exibe o painel de status e recursos do bot',
     execute: async (ctx) => {
       const cfg = ctx.config;
@@ -32,6 +32,8 @@ export function registerStatusCommand(dispatcher, options = {}) {
       const presenceCount = Object.keys(store.typingChats || cfg.typingChats || {}).length;
 
       let msg = `📊 *PAINEL DO BOT* 📊\n\n` +
+        `🤖 *Comandos:* ${cfg.commandsEnabled ? 'Ativados ✅' : 'Desativados 🛑'}\n` +
+        `👥 *Público:* ${cfg.allowPublicCommands ? 'Liberado ✅' : 'Restrito ao Dono 🔒'}\n` +
         `⚙️ *Modo de Status:* ${modoDesc}\n` +
         `👁️ *Status Vistos:* ${store.statusViewedCount || 0}\n` +
         `👀 *Views Recebidas (Status):* ${store.statusViewsReceivedCount || 0}\n` +
@@ -41,9 +43,9 @@ export function registerStatusCommand(dispatcher, options = {}) {
       if (isFullBot) {
         msg += `✨ *Figurinhas Feitas:* ${store.stickersCreatedCount || 0}\n` +
                `🎵 *Músicas Baixadas:* ${store.musicDownloadedCount || 0}\n` +
-               `📥 *Auto-Download:* ${cfg.autoDownload !== false ? 'Ativado ✅' : 'Desativado ❌'}\n` +
-               `🗑️ *Auto-Apagar:* ${cfg.autoDeleteWord !== false ? 'Ativado ✅' : 'Desativado ❌'}\n` +
-               `📺 *Notificação Anime:* ${cfg.autoAnimeNotify !== false ? 'Ativado ✅' : 'Desativado ❌'}\n`;
+               `📥 *Auto-Download:* ${cfg.autoDownload ? 'Ativado ✅' : 'Desativado ❌'}\n` +
+               `🗑️ *Auto-Apagar:* ${cfg.autoDeleteWord ? 'Ativado ✅' : 'Desativado ❌'}\n` +
+               `📺 *Notificação Anime:* ${cfg.autoAnimeNotify ? 'Ativado ✅' : 'Desativado ❌'}\n`;
       }
 
       msg += `💾 *RAM:* ${ramMB} MB\n` +
@@ -59,12 +61,14 @@ export function registerStatusCommand(dispatcher, options = {}) {
     dispatcher.registerCommand({
       name: 'menu',
       aliases: ['ajuda', 'help'],
-      ownerOnly: true,
+      ownerOnly: false,
       description: 'Exibe o menu de comandos do Status Bot',
       execute: async (ctx) => {
         const prefix = ctx.prefix;
         const msg = `⚡ *STATUS BOT PESSOAL* ⚡\n\n` +
           `*Comandos (Prefixo: \`${prefix}\`):*\n` +
+          `• \`${prefix}bot\` [on/off] - Ativa ou desativa o bot\n` +
+          `• \`${prefix}publico\` [on/off] - Libera/bloqueia comandos para o público\n` +
           `• \`${prefix}digita\` / \`${prefix}grava\` / \`${prefix}online\` - Presença fake (toggle)\n` +
           `• \`${prefix}parar\` - Para presença fake no chat atual\n` +
           `• \`${prefix}reset\` - Reseta presença fake em todos os chats\n` +
