@@ -30,6 +30,7 @@ async function main() {
   const config = configManager.get();
   logger.banner(config.botName, [
     `Prefixo Ativo: ${config.prefix}`,
+    `Donos: ${configManager.getOwnerPhones().join(', ') || 'Nenhum'}`,
     `Modo Inicial: ${config.mode.toUpperCase()} (Emoji: ${config.emoji})`,
     'Inicializando gerenciadores e listeners...'
   ]);
