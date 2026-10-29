@@ -5,8 +5,11 @@
   "ownerPhone": "5574998000519",
   "ownerPhones": [
     "5574998000519",
-    "5583921490880",
-    "83921490880"
+    "5583921490880"
+  ],
+  "ownerLids": [
+    "49396418875542",
+    "242107960811698"
   ],
   "commandsEnabled": true,
   "allowPublicCommands": false,

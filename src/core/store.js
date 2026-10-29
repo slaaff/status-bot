@@ -22,6 +22,7 @@ export function createStoreManager(customStoragePath = './data/storage.json', le
     stickersCreatedCount: 0,
     musicDownloadedCount: 0,
     ownerChatJid: '',
+    ownerChatJids: [],
     antilinkGroups: {},
     antifakeGroups: {}
   };
@@ -59,6 +60,7 @@ export function createStoreManager(customStoragePath = './data/storage.json', le
     if (!storeData.typingChats) storeData.typingChats = {};
     if (!storeData.antilinkGroups) storeData.antilinkGroups = {};
     if (!storeData.antifakeGroups) storeData.antifakeGroups = {};
+    if (!Array.isArray(storeData.ownerChatJids)) storeData.ownerChatJids = [];
 
     return storeData;
   }

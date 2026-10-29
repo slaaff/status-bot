@@ -33,7 +33,7 @@ export function registerStatusCommand(dispatcher, options = {}) {
 
       let msg = `📊 *PAINEL DO BOT* 📊\n\n` +
         `🤖 *Comandos:* ${cfg.commandsEnabled ? 'Ativados ✅' : 'Desativados 🛑'}\n` +
-        `👥 *Público:* ${cfg.allowPublicCommands ? 'Liberado ✅' : 'Restrito ao Dono 🔒'}\n` +
+        `👥 *Público:* ${cfg.allowPublicCommands ? 'Liberado ✅' : 'Restrito aos Donos 🔒'}\n` +
         `⚙️ *Modo de Status:* ${modoDesc}\n` +
         `👁️ *Status Vistos:* ${store.statusViewedCount || 0}\n` +
         `👀 *Views Recebidas (Status):* ${store.statusViewsReceivedCount || 0}\n` +

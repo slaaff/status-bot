@@ -2,7 +2,8 @@
  * Gerenciador centralizado de configurações
  * - Carregamento seguro com valores padrão
  * - Gravação debounced com flush garantido no encerramento do processo
- * - Cache de telefones normalizados para latência ultra-baixa
+ * - Cache de telefones e LIDs normalizados para latência ultra-baixa O(1)
+ * - Suporte robusto a múltiplos donos (reconhecimento por LID, DDI, 8 e 9 dígitos)
  * - Sincronização automática entre modos de status (mode <-> autoViewStatus/autoLikeStatus)
  */
 
@@ -14,17 +15,19 @@ export function createConfigManager(customConfigPath = './config.json', botDefau
   const filePath = path.resolve(customConfigPath);
 
   const baseDefaults = {
-    botName: 'WhatsApp Bot',
+    botName: 'Status Bot Pessoal',
     prefix: '.',
+    phoneNumber: '5574998000519',
     ownerPhone: '5574998000519',
-    ownerPhones: ['5574998000519'],
-    commandsEnabled: false, // Inicia desativado por padrão
+    ownerPhones: ['5574998000519', '5583921490880'],
+    ownerLids: ['49396418875542', '242107960811698'],
+    commandsEnabled: true,
     allowPublicCommands: false, // Inicia desativado pro público por padrão
-    mode: 'off', // 'view' | 'like' | 'both' | 'off'
-    emoji: '❤️',
+    mode: 'like', // 'view' | 'like' | 'both' | 'off'
+    emoji: '💚',
     autoViewStatus: false,
-    autoLikeStatus: false,
-    autoLikeEmoji: '❤️',
+    autoLikeStatus: true,
+    autoLikeEmoji: '💚',
     autoDownload: false,
     autoDeleteWord: false,
     autoAnimeNotify: false,
@@ -32,8 +35,6 @@ export function createConfigManager(customConfigPath = './config.json', botDefau
     alwaysTypingChats: [],
     stickerPack: 'WhatsApp Bot',
     stickerAuthor: 'Bot',
-    malClientId: '368675841a014b3b3ce2419c6b875cb8',
-    malUsername: 'farinhadetrigo',
     ...botDefaults
   };
 
@@ -41,40 +42,124 @@ export function createConfigManager(customConfigPath = './config.json', botDefau
   let saveTimer = null;
   let isDirty = false;
 
-  // Cache em memória de telefones normalizados para validação em O(1)
+  // LIDs conhecidos e imutáveis dos dois donos (identificadores multi-device do WhatsApp)
+  const KNOWN_OWNER_LIDS = [
+    '49396418875542', // Dono 1: João Vitor (5574998000519 / 557498000519)
+    '242107960811698'  // Dono 2: Cloud Connect (5583921490880)
+  ];
+
+  // Cache em memória de telefones e LIDs para validação em O(1)
+  let cachedPrimaryOwnerPhones = [];
   let cachedOwnerPhones = [];
   let cachedOwnerSet = new Set();
 
   function updateOwnerCache() {
-    const list = new Set();
+    const fullSet = new Set();
+    const phoneSet = new Set();
+    const primaryPhones = [];
+
+    function addPrimary(p) {
+      if (typeof p === 'string' || typeof p === 'number') {
+        let clean = String(p).replace(/\D/g, '');
+        if (!clean) return;
+        if ((clean.length === 10 || clean.length === 11) && !clean.startsWith('55')) {
+          clean = '55' + clean;
+        }
+        if (clean.startsWith('55') && clean.length === 12) {
+          clean = clean.slice(0, 4) + '9' + clean.slice(4);
+        }
+        if (!primaryPhones.includes(clean)) {
+          primaryPhones.push(clean);
+        }
+      }
+    }
 
     function addPhone(p) {
       if (typeof p === 'string' || typeof p === 'number') {
-        const clean = String(p).replace(/\D/g, '');
-        if (clean) {
-          list.add(clean);
-          if ((clean.length === 10 || clean.length === 11) && !clean.startsWith('55')) {
-            list.add('55' + clean);
-          } else if (clean.startsWith('55') && (clean.length === 12 || clean.length === 13)) {
-            list.add(clean.slice(2));
+        let clean = String(p).replace(/\D/g, '');
+        if (!clean) return;
+
+        fullSet.add(clean);
+        phoneSet.add(clean);
+
+        // Gera todas as variações brasileiras (com/sem 55, com/sem 9º dígito)
+        let local = clean;
+        if (local.startsWith('55') && (local.length === 12 || local.length === 13)) {
+          local = local.slice(2);
+        }
+
+        if (local.length === 10 || local.length === 11) {
+          const ddd = local.slice(0, 2);
+          const rest = local.slice(2);
+
+          let withNine = '';
+          let withoutNine = '';
+
+          if (rest.length === 9) {
+            withNine = rest;
+            withoutNine = rest.slice(1);
+          } else if (rest.length === 8) {
+            withoutNine = rest;
+            withNine = '9' + rest;
+          }
+
+          if (withNine) {
+            const num11 = ddd + withNine;
+            fullSet.add(num11);
+            fullSet.add('55' + num11);
+            phoneSet.add(num11);
+            phoneSet.add('55' + num11);
+          }
+
+          if (withoutNine) {
+            const num10 = ddd + withoutNine;
+            fullSet.add(num10);
+            fullSet.add('55' + num10);
+            phoneSet.add(num10);
+            phoneSet.add('55' + num10);
           }
         }
       }
     }
 
+    function addLid(l) {
+      if (typeof l === 'string' || typeof l === 'number') {
+        const clean = String(l).split('@')[0].split(':')[0].replace(/\D/g, '');
+        if (clean) {
+          fullSet.add(clean);
+        }
+      }
+    }
+
+    // 1. Processa telefones dos donos configurados
     if (Array.isArray(configData.ownerPhones)) {
       for (const p of configData.ownerPhones) {
+        addPrimary(p);
         addPhone(p);
       }
     }
 
     const singlePhone = configData.ownerPhone || configData.phoneNumber;
     if (singlePhone) {
+      addPrimary(singlePhone);
       addPhone(singlePhone);
     }
 
-    cachedOwnerPhones = Array.from(list);
-    cachedOwnerSet = new Set(cachedOwnerPhones);
+    // 2. Registra LIDs conhecidos dos donos
+    for (const lid of KNOWN_OWNER_LIDS) {
+      addLid(lid);
+    }
+
+    // 3. Registra LIDs configurados em configData.ownerLids
+    if (Array.isArray(configData.ownerLids)) {
+      for (const l of configData.ownerLids) {
+        addLid(l);
+      }
+    }
+
+    cachedPrimaryOwnerPhones = primaryPhones;
+    cachedOwnerPhones = Array.from(phoneSet);
+    cachedOwnerSet = fullSet;
   }
 
   function syncStatusModes(cfg) {
@@ -181,15 +266,15 @@ export function createConfigManager(customConfigPath = './config.json', botDefau
     return false;
   }
 
-  function isOwner(senderJidOrNum, sockUser = null) {
+  function isOwner(senderJidOrNum, sockUser = null, store = null) {
     if (!senderJidOrNum) return false;
     const cleanSender = String(senderJidOrNum).split('@')[0].split(':')[0].replace(/\D/g, '');
     if (!cleanSender) return false;
 
-    // Validação direta via Set O(1)
+    // 1. Validação O(1) no Set pré-indexado (contém todas variações de telefones e LIDs dos donos)
     if (cachedOwnerSet.has(cleanSender)) return true;
 
-    // Compara com o próprio bot conectado (LID ou telefone)
+    // 2. Compara com a sessão ativa conectada do Baileys (telefone ou LID)
     if (sockUser?.id) {
       const botNum = sockUser.id.split('@')[0].split(':')[0].replace(/\D/g, '');
       if (cleanSender === botNum || isSamePhone(cleanSender, botNum)) return true;
@@ -199,7 +284,16 @@ export function createConfigManager(customConfigPath = './config.json', botDefau
       if (cleanSender === botLid) return true;
     }
 
-    // Validação com tolerância a 9 dígitos
+    // 3. Compara com JIDs/LIDs salvos dinamicamente no store
+    if (store && Array.isArray(store.ownerChatJids)) {
+      for (const jid of store.ownerChatJids) {
+        if (!jid) continue;
+        const cleanJid = String(jid).split('@')[0].split(':')[0].replace(/\D/g, '');
+        if (cleanJid === cleanSender) return true;
+      }
+    }
+
+    // 4. Validação com tolerância a 9 dígitos para telefones
     for (const owner of cachedOwnerPhones) {
       if (isSamePhone(cleanSender, owner)) return true;
     }
@@ -218,7 +312,7 @@ export function createConfigManager(customConfigPath = './config.json', botDefau
     save,
     flush,
     reload: load,
-    getOwnerPhones: () => cachedOwnerPhones,
+    getOwnerPhones: () => cachedPrimaryOwnerPhones,
     isOwner,
     isSamePhone
   };

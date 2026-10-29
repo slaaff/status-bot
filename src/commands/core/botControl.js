@@ -66,7 +66,7 @@ export function registerBotControlCommands(dispatcher) {
         );
       } else {
         await ctx.reply(
-          `🔒 *Comandos Públicos: DESATIVADOS ❌*\n\nO bot responderá única e exclusivamente a comandos enviados pelo dono.`
+          `🔒 *Comandos Públicos: DESATIVADOS ❌*\n\nO bot responderá única e exclusivamente aos dois donos.`
         );
       }
     }

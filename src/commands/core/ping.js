@@ -29,7 +29,7 @@ export function registerPingCommand(dispatcher) {
         `💾 *RAM:* ${ramMB} MB\n` +
         `⏱️ *Uptime:* ${h}h ${m}m ${s}s\n` +
         `⚙️ *Prefixo:* \`${ctx.prefix}\`\n` +
-        `👥 *Público:* ${ctx.config.allowPublicCommands ? 'Liberado ✅' : 'Restrito 🔒'}`
+        `👥 *Público:* ${ctx.config.allowPublicCommands ? 'Liberado ✅' : 'Restrito aos Donos 🔒'}`
       );
       const sendDuration = Date.now() - sendStart;
       logger.info('PING', `Resposta enviada em ${sendDuration}ms (Inbound: ${inboundLatency}ms)`);

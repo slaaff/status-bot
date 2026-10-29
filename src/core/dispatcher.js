@@ -1,9 +1,11 @@
 /**
- * Despachante Modular e Otimizado de Comandos
- * - Roteamento estrito de prefixo (! para whatsapp-bot, . para status-bot)
- * - Trava mestre de ativação/desativação geral de comandos (.bot on/off / .ativar)
- * - Trava de ativação/desativação pública (.publico on/off)
- * - Execução ultra-rápida e não-bloqueante
+ * Despachante Central de Mensagens e Comandos
+ * - Roteamento ultra-rápido de comandos via Map O(1)
+ * - Validação estrita de prefixo ('!' para whatsapp-bot, '.' para status-bot)
+ * - Trava mestre de comandos (.bot on/off, .ativar)
+ * - Trava de acesso público (.publico on/off): quando público estiver off, responde exclusivamente aos donos
+ * - Reconhecimento e aprendizado dinâmico de identificadores dos dois donos (LID e telefone)
+ * - Hooks passivos modulares (anti-link, downloads automáticos, apagar mensagem)
  */
 
 import { logger } from './logger.js';
@@ -17,7 +19,7 @@ export function createDispatcher(options) {
 
   function registerCommand(cmdDef) {
     if (!cmdDef.name || typeof cmdDef.execute !== 'function') {
-      throw new Error(`Comando inválido: ${JSON.stringify(cmdDef)}`);
+      throw new Error(`Comando inválido: nome e método execute são obrigatórios`);
     }
 
     const name = cmdDef.name.toLowerCase();
@@ -40,23 +42,15 @@ export function createDispatcher(options) {
     const msg = m.message;
     if (!msg) return '';
 
-    // Clique em botão interativo Baileys
-    if (msg.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson) {
-      try {
-        const parsed = JSON.parse(msg.interactiveResponseMessage.nativeFlowResponseMessage.paramsJson);
-        if (parsed.id) return parsed.id;
-      } catch {}
-    }
-    if (msg.buttonsResponseMessage?.selectedButtonId) return msg.buttonsResponseMessage.selectedButtonId;
-    if (msg.templateButtonReplyMessage?.selectedId) return msg.templateButtonReplyMessage.selectedId;
-    if (msg.listResponseMessage?.singleSelectReply?.selectedRowId) return msg.listResponseMessage.singleSelectReply.selectedRowId;
-
     return (
       msg.conversation ||
       msg.extendedTextMessage?.text ||
       msg.imageMessage?.caption ||
       msg.videoMessage?.caption ||
       msg.documentMessage?.caption ||
+      msg.buttonsResponseMessage?.selectedButtonId ||
+      msg.listResponseMessage?.singleSelectReply?.selectedRowId ||
+      msg.templateButtonReplyMessage?.selectedId ||
       ''
     ).trim();
   }
@@ -77,7 +71,35 @@ export function createDispatcher(options) {
     const isGroup = remoteJid.endsWith('@g.us');
     const participant = m.key.participant || (isGroup ? '' : remoteJid);
     const sender = participant || remoteJid;
-    const isFromOwner = m.key.fromMe || configManager.isOwner(sender, sock.user);
+    const store = storeManager ? storeManager.get() : null;
+
+    // Reconhecimento dos donos:
+    // - Mensagem enviada pelo próprio WhatsApp do bot / Web WhatsApp (m.key.fromMe)
+    // - Remetente da mensagem (sender / participant)
+    // - Em chat privado (DM), o remoteJid identifica diretamente o usuário
+    const isFromOwner = Boolean(
+      m.key.fromMe ||
+      configManager.isOwner(sender, sock.user, store) ||
+      (!isGroup && configManager.isOwner(remoteJid, sock.user, store))
+    );
+
+    // Aprendizado dinâmico do JID/LID dos donos no store
+    if (isFromOwner && store) {
+      let changed = false;
+      if (!Array.isArray(store.ownerChatJids)) {
+        store.ownerChatJids = [];
+        changed = true;
+      }
+      for (const target of [sender, remoteJid]) {
+        if (target && !target.endsWith('@g.us') && !store.ownerChatJids.includes(target)) {
+          store.ownerChatJids.push(target);
+          changed = true;
+        }
+      }
+      if (changed) {
+        storeManager.save();
+      }
+    }
 
     // Contexto enriquecido para os handlers
     const ctx = {
@@ -91,7 +113,7 @@ export function createDispatcher(options) {
       isFromOwner,
       fullText,
       config,
-      store: storeManager.get(),
+      store,
       configManager,
       storeManager,
 
@@ -108,6 +130,23 @@ export function createDispatcher(options) {
     if (!isCommand) {
       // Se comandos/bot estiverem desativados e não for dono, não processa hooks passivos
       if (config.commandsEnabled === false && !isFromOwner) return;
+
+      // Se público estiver desativado (público off) e NÃO for dono:
+      // O bot NÃO responde a ninguém além dos dois donos.
+      // Apenas hooks estritos de moderação/segurança de grupo (como antilink) podem rodar se o grupo estiver protegido.
+      if (!config.allowPublicCommands && !isFromOwner) {
+        for (const hook of passiveHooks) {
+          try {
+            if (hook.isSecurityHook) {
+              const handled = await hook(ctx);
+              if (handled === true) return;
+            }
+          } catch (err) {
+            logger.error('HOOK', `Erro no hook de segurança passivo: ${err.message}`);
+          }
+        }
+        return;
+      }
 
       for (const hook of passiveHooks) {
         try {
@@ -135,7 +174,7 @@ export function createDispatcher(options) {
     if (!cmdDef) return;
 
     // 4. Trava Mestre: Comandos Ativados/Desativados
-    // Comandos de ativação mestre (.bot, .ativar, .comandos) são sempre permitidos para o dono
+    // Comandos de ativação mestre (.bot, .ativar, .comandos, .publico) são sempre permitidos para o dono
     const isActivationCmd = ['bot', 'ativar', 'desativar', 'comandos', 'publico'].includes(resolvedName);
     if (config.commandsEnabled === false && !isActivationCmd) {
       if (isFromOwner) {
@@ -146,10 +185,11 @@ export function createDispatcher(options) {
       return;
     }
 
-    // 5. Trava do Público: Ativação/Desativação pro público
+    // 5. Trava do Público: Se público estiver OFF (allowPublicCommands === false), responde SOMENTE aos dois donos!
     if (!isFromOwner) {
       if (!config.allowPublicCommands) {
         // Se desativado pro público, ignora silenciosamente requisições de outros
+        logger.info('DISPATCHER', `Comando ${strictPrefix}${commandName} ignorado (Público OFF e remetente não é dono: +${ctx.senderNum})`);
         return;
       }
       if (cmdDef.ownerOnly) {
