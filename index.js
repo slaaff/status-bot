@@ -60,18 +60,19 @@ console.error = (...args) => {
 };
 
 const configPath = path.resolve('./config.json');
+const statsPath = path.resolve('./stats.json');
 
 function loadConfig() {
   const defaults = {
     mode: 'both', // 'view' | 'like' | 'both' | 'off'
     emoji: '❤️',
     phoneNumber: '5574998000519',
-    alwaysTypingChats: []
+    typingChats: {}
   };
   try {
     if (fs.existsSync(configPath)) {
       const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-      if (!Array.isArray(parsed.alwaysTypingChats)) parsed.alwaysTypingChats = [];
+      if (!parsed.typingChats) parsed.typingChats = {};
       return { ...defaults, ...parsed };
     }
   } catch {}
@@ -88,23 +89,47 @@ function saveConfig() {
   }, 1000);
 }
 
-// Loop de Sempre Digitando (Fake Typing contínuo para chats selecionados)
-let alwaysTypingInterval = null;
-function startAlwaysTypingLoop(sock) {
-  if (alwaysTypingInterval) clearInterval(alwaysTypingInterval);
-  alwaysTypingInterval = setInterval(async () => {
-    if (!sock?.ws?.isOpen) return;
-    if (!Array.isArray(config.alwaysTypingChats) || config.alwaysTypingChats.length === 0) return;
+const PRESENCE_INTERVAL_MS = 10000;
+let presenceInterval = null;
 
-    for (const jid of config.alwaysTypingChats) {
+function iniciarPresenceLoop(sock) {
+  if (presenceInterval) clearInterval(presenceInterval);
+  if (!sock) return;
+
+  const tick = async () => {
+    if (!activeSock || !config.typingChats) return;
+    const entries = Object.entries(config.typingChats);
+    for (const [jid, info] of entries) {
+      const mode = (typeof info === 'object' ? info?.mode : info) || 'composing';
       try {
-        await sock.sendPresenceUpdate('composing', jid);
-      } catch {}
+        await activeSock.sendPresenceUpdate(mode, jid);
+      } catch (e) {}
     }
-  }, 8000);
+  };
+
+  tick().catch(() => {});
+  presenceInterval = setInterval(tick, PRESENCE_INTERVAL_MS);
 }
 
+function loadStats() {
+  const defaults = { viewed: 0, liked: 0, totalViewsReceived: 0, viewsReceived: {} };
+  try {
+    if (fs.existsSync(statsPath)) {
+      return { ...defaults, ...JSON.parse(fs.readFileSync(statsPath, 'utf8')) };
+    }
+  } catch {}
+  return defaults;
+}
 
+let stats = loadStats();
+let saveStatsTimer = null;
+function saveStats() {
+  if (saveStatsTimer) return;
+  saveStatsTimer = setTimeout(() => {
+    fs.writeFile(statsPath, JSON.stringify(stats, null, 2), () => {});
+    saveStatsTimer = null;
+  }, 2000);
+}
 
 /**
  * Wrapper com Cache LRU em memória para useMultiFileAuthState
@@ -113,7 +138,7 @@ function startAlwaysTypingLoop(sock) {
 async function useCachedAuthState(sessionDir) {
   const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
   const cache = new Map();
-  const MAX_CACHE = 400;
+  const MAX_CACHE = 2000;
 
   function cacheGet(key) {
     if (!cache.has(key)) return undefined;
@@ -176,7 +201,7 @@ async function useCachedAuthState(sessionDir) {
 
 // Cache leve de mensagens para retries (máx 500 mensagens)
 const msgRetryCache = new Map();
-const MAX_RETRY_CACHE = 50;
+const MAX_RETRY_CACHE = 500;
 function cacheMessage(m) {
   if (m?.key?.id && m?.message) {
     if (msgRetryCache.size >= MAX_RETRY_CACHE) {
@@ -189,7 +214,7 @@ function cacheMessage(m) {
 
 // Deduplicação de status para evitar curtir/contar o mesmo status mais de uma vez
 const processedStatusIds = new Set();
-const MAX_PROCESSED_STATUS = 1000;
+const MAX_PROCESSED_STATUS = 3000;
 function isStatusAlreadyProcessed(statusId) {
   if (!statusId) return false;
   if (processedStatusIds.has(statusId)) return true;
@@ -208,6 +233,7 @@ const MAX_BACKOFF_MS = 30000;
 
 async function startBot() {
   config = loadConfig();
+  stats = loadStats();
 
   // Limpa socket e listeners anteriores para evitar conexões zumbis
   if (activeSock) {
@@ -247,7 +273,59 @@ async function startBot() {
   // Descarta mensagens antigas de sincronização de histórico silenciosamente
   sock.ev.on('messaging-history.set', () => {});
 
-  
+  // Captura recibos de leitura (visualizações de status@broadcast)
+  sock.ev.on('message-receipt.update', async (receipts) => {
+    if (!Array.isArray(receipts)) return;
+    for (const item of receipts) {
+      if (item.key?.remoteJid === 'status@broadcast') {
+        const statusId = item.key.id;
+        const viewer = item.receipt?.userJid;
+        const isRead = !!item.receipt?.readTimestamp;
+
+        if (isRead && viewer) {
+          if (!stats.viewsReceived) stats.viewsReceived = {};
+          if (!stats.viewsReceived[statusId]) stats.viewsReceived[statusId] = [];
+
+          if (!stats.viewsReceived[statusId].includes(viewer)) {
+            stats.viewsReceived[statusId].push(viewer);
+            stats.totalViewsReceived = (stats.totalViewsReceived || 0) + 1;
+            saveStats();
+            const viewerNum = viewer.split('@')[0];
+            console.log(`[STATUS] Status visualizado por +${viewerNum} (Total recebidas: ${stats.totalViewsReceived})`);
+          }
+        }
+      }
+    }
+  });
+
+  // Captura atualizações de mensagens para status@broadcast (ex: recibos em lote)
+  sock.ev.on('messages.update', async (updates) => {
+    if (!Array.isArray(updates)) return;
+    for (const item of updates) {
+      if (item.key?.remoteJid === 'status@broadcast') {
+        const statusId = item.key.id;
+        const userReceipts = item.update?.userReceipt;
+        if (Array.isArray(userReceipts)) {
+          if (!stats.viewsReceived) stats.viewsReceived = {};
+          if (!stats.viewsReceived[statusId]) stats.viewsReceived[statusId] = [];
+
+          let changed = false;
+          for (const ur of userReceipts) {
+            if (ur.userJid && ur.readTimestamp && !stats.viewsReceived[statusId].includes(ur.userJid)) {
+              stats.viewsReceived[statusId].push(ur.userJid);
+              stats.totalViewsReceived = (stats.totalViewsReceived || 0) + 1;
+              changed = true;
+            }
+          }
+          if (changed) {
+            saveStats();
+            console.log(`[STATUS] Visualizações de status atualizadas (Total: ${stats.totalViewsReceived})`);
+          }
+        }
+      }
+    }
+  });
+
   // Monitorar status da conexão
   sock.ev.on('connection.update', (update) => {
     const { connection, lastDisconnect, qr } = update;
@@ -289,7 +367,7 @@ async function startBot() {
       if (fs.existsSync('./qr.txt')) {
         try { fs.unlinkSync('./qr.txt'); } catch {}
       }
-      startAlwaysTypingLoop(sock);
+      iniciarPresenceLoop(sock);
     }
   });
 
@@ -319,10 +397,12 @@ async function startBot() {
             };
             const sender = participant.split('@')[0] || 'Contato';
 
-            // Modo Visualizar ou Ambos -> marca como lido (sem gravar contadores em disco)
+            // Modo Visualizar ou Ambos -> marca como lido
             if (config.mode === 'view' || config.mode === 'both') {
               await sock.readMessages([statusKey]);
-              console.log(`[STATUS] Visualizado de +${sender}`);
+              stats.viewed = (stats.viewed || 0) + 1;
+              saveStats();
+              console.log(`[STATUS] Visualizado de +${sender} (Total: ${stats.viewed})`);
             }
 
             // Modo Curtir ou Ambos -> reage no status
@@ -335,7 +415,9 @@ async function startBot() {
               }, {
                 statusJidList: [participant]
               });
-              console.log(`[STATUS] Curtido com ${config.emoji || '❤️'} de +${sender}${config.mode === 'like' ? ' (Círculo verde mantido)' : ''}`);
+              stats.liked = (stats.liked || 0) + 1;
+              saveStats();
+              console.log(`[STATUS] Curtido com ${config.emoji || '❤️'} de +${sender}${config.mode === 'like' ? ' (Círculo verde mantido)' : ''} (Total: ${stats.liked})`);
             }
           } catch (err) {
             console.error('[STATUS ERRO]', err.message);
@@ -344,8 +426,13 @@ async function startBot() {
         continue;
       }
 
-      // 2. ISOLAMENTO TOTAL: Ignora 100% de mensagens de terceiros e grupos
-      if (!m.key.fromMe) continue;
+      // 2. Permissões: Aceita mensagens enviadas pela própria conta (fromMe) ou pelo dono cadastrado
+      const senderNum = (participant || remoteJid || '').split('@')[0].split(':')[0].replace(/\D/g, '');
+      const ownerNum = (config.phoneNumber || '').replace(/\D/g, '');
+      const isOwnerPhone = ownerNum && (senderNum === ownerNum || senderNum.endsWith(ownerNum.slice(4)) || ownerNum.endsWith(senderNum.slice(4)));
+      const isFromOwner = m.key.fromMe || isOwnerPhone;
+
+      if (!isFromOwner) continue;
 
       // Extrai texto da mensagem enviada pelo próprio dono
       const fullText = (
@@ -397,72 +484,21 @@ async function startBot() {
           text: '❌ *Status Bot:* DESLIGADO\n(Não visualiza e nem curte status)'
         }, { quoted: m });
       }
+      else if (['restart', 'reiniciar', 'reboot'].includes(cmd)) {
+        await sock.sendMessage(remoteJid, {
+          text: '🔄 *Reiniciando o Status Bot...*\n\nAguarde cerca de 5 segundos para a reconexão automática.'
+        }, { quoted: m });
+
+        setTimeout(() => {
+          process.exit(0);
+        }, 1500);
+      }
       else if (cmd === 'emoji') {
         if (args[0]) {
           config.emoji = args[0];
           saveConfig();
           await sock.sendMessage(remoteJid, {
             text: `🎨 *Emoji de Reação Atualizado:* ${config.emoji}`
-          }, { quoted: m });
-        }
-      }
-      else if (cmd === 'digitando') {
-        if (!Array.isArray(config.alwaysTypingChats)) {
-          config.alwaysTypingChats = [];
-        }
-
-        const subCmd = (args[0] || '').toLowerCase();
-
-        // Listar chats com digitando ativo
-        if (subCmd === 'list' || subCmd === 'lista') {
-          if (config.alwaysTypingChats.length === 0) {
-            await sock.sendMessage(remoteJid, {
-              text: '✍️ *Sempre Digitando:* Nenhum chat ativo no momento.\nEnvie `.digitando` na conversa desejada para ativar.'
-            }, { quoted: m });
-          } else {
-            const listText = config.alwaysTypingChats.map(c => `• ${c.split('@')[0]}`).join('\n');
-            await sock.sendMessage(remoteJid, {
-              text: `✍️ *Chats com "Sempre Digitando" Ativo (${config.alwaysTypingChats.length}):*\n\n${listText}\n\n_Para desativar, envie \`.digitando off\` na conversa._`
-            }, { quoted: m });
-          }
-          return;
-        }
-
-        // Se passar um número como argumento (ex: .digitando 557499999999), usa ele; senão usa o chat atual
-        let targetJid = remoteJid;
-        const potentialPhone = (args[0] || '').replace(/\D/g, '');
-        if (potentialPhone.length >= 10 && potentialPhone.length <= 15) {
-          targetJid = `${potentialPhone}@s.whatsapp.net`;
-        }
-
-        const isCurrentlyActive = config.alwaysTypingChats.includes(targetJid);
-        let shouldActivate = !isCurrentlyActive;
-
-        if (['on', '1', 'ativar', 'sim', 'true'].includes(subCmd)) {
-          shouldActivate = true;
-        } else if (['off', '0', 'desativar', 'nao', 'não', 'false'].includes(subCmd)) {
-          shouldActivate = false;
-        }
-
-        if (shouldActivate) {
-          if (!config.alwaysTypingChats.includes(targetJid)) {
-            config.alwaysTypingChats.push(targetJid);
-          }
-          saveConfig();
-          try {
-            await sock.sendPresenceUpdate('composing', targetJid);
-          } catch {}
-          await sock.sendMessage(remoteJid, {
-            text: `✍️ *Sempre Digitando:* ATIVADO ✅\nChat: \`${targetJid.split('@')[0]}\`\n(Você aparecerá continuamente como "Digitando..." neste chat)`
-          }, { quoted: m });
-        } else {
-          config.alwaysTypingChats = config.alwaysTypingChats.filter(c => c !== targetJid);
-          saveConfig();
-          try {
-            await sock.sendPresenceUpdate('paused', targetJid);
-          } catch {}
-          await sock.sendMessage(remoteJid, {
-            text: `⏸️ *Sempre Digitando:* DESATIVADO ❌\nChat: \`${targetJid.split('@')[0]}\`\n(Você não aparece mais digitando neste chat)`
           }, { quoted: m });
         }
       }
@@ -483,10 +519,17 @@ async function startBot() {
 
         const msg = `⚡ *STATUS BOT PESSOAL* ⚡\n\n` +
           `⚙️ *Modo Atual:* ${modoDesc}\n` +
-          `✍️ *Sempre Digitando:* ${config.alwaysTypingChats?.length || 0} chat(s) ativo(s)\n` +
+          `👁️ *Total Visualizados:* ${stats.viewed || 0}\n` +
+          `👀 *Views Recebidas (Status):* ${stats.totalViewsReceived || 0}\n` +
+          `❤️ *Total Curtidos:* ${stats.liked || 0}\n` +
+          `⌨️ *Presença Fake:* ${Object.keys(config.typingChats || {}).length} chat(s) ativo(s)\n` +
           `💾 *RAM:* ${ramMB} MB\n` +
           `⏱️ *Tempo Ativo:* ${h}h ${min}m ${s}s\n\n` +
-          `*Comandos (Prefixo: \`.\`):*\n` +
+          `*Comandos (Prefixo: \`.\` ou \`!\`):*\n` +
+          `• \`.digita\` / \`.grava\` / \`.online\` - Presença fake (mesmo comando liga/desliga)\n` +
+          `• \`.parar\` - Para presença fake no chat atual\n` +
+          `• \`.reset\` - Reseta presença fake em todos os chats\n` +
+          `• \`.restart\` - Reinicia o bot caso esteja travado\n` +
           `• \`.visualizar\` - Só marca como lido\n` +
           `• \`.curtir\` [emoji] - Só curte (mantém círculo verde)\n` +
           `• \`.ambos\` [emoji] - Visualiza e curte juntos\n` +
@@ -495,6 +538,175 @@ async function startBot() {
           `• \`.status\` - Mostra este painel`;
 
         await sock.sendMessage(remoteJid, { text: msg }, { quoted: m });
+      }
+      else if (['digita', 'digitando', 'typing', 'grava', 'gravando', 'audio', 'áudio', 'rec', 'online', 'disp', 'presenca', 'presença', 'parar', 'stop', 'reset', 'resetar', 'desativardigita', 'limpardigita'].includes(cmd)) {
+        if (!config.typingChats) config.typingChats = {};
+
+        const subcmd = (args[0] || '').toLowerCase();
+        const extra = (args[1] || '').toLowerCase();
+
+        const getChatDisplayName = async (jid) => {
+          let name = '';
+          if (jid.endsWith('@g.us')) {
+            try {
+              const meta = await sock.groupMetadata(jid);
+              name = meta.subject;
+            } catch {
+              name = 'Grupo';
+            }
+          } else {
+            name = `+${jid.split('@')[0]}`;
+          }
+          return name;
+        };
+
+        // 1. Desativar de TODOS os chats de uma vez (!reset, .reset, !resetar, .digita reset, .digita off all)
+        const isResetAll = ['reset', 'resetar', 'desativardigita', 'limpardigita'].includes(cmd) ||
+                           (['off', '0', 'desativar', 'parar', 'stop', 'reset', 'limpar'].includes(subcmd) && ['all', 'todos', 'tudo'].includes(extra)) ||
+                           (['off', '0', 'desativar', 'parar', 'stop', 'reset', 'limpar'].includes(cmd) && ['all', 'todos', 'tudo'].includes(subcmd)) ||
+                           ['reset', 'resetar', 'limpar', 'limpartudo', 'desativartudo'].includes(subcmd) ||
+                           (subcmd === 'all' || subcmd === 'todos');
+
+        if (isResetAll) {
+          const activeJids = Object.keys(config.typingChats);
+          const count = activeJids.length;
+
+          for (const jid of activeJids) {
+            try {
+              await sock.sendPresenceUpdate('paused', jid);
+            } catch {}
+          }
+
+          config.typingChats = {};
+          saveConfig();
+
+          await sock.sendMessage(remoteJid, {
+            text: `🧹 *Presença Fake Resetada em Todos os Chats!*\n\nForam limpos e pausados *${count}* chat(s).\nSua conta agora está em estado normal em todas as conversas.`
+          }, { quoted: m });
+          return;
+        }
+
+        // 2. Listar onde a presença fake está ativa
+        if (['lista', 'list', 'status', 'chats', 'ativos', 'onde'].includes(subcmd)) {
+          const activeJids = Object.keys(config.typingChats);
+
+          if (activeJids.length === 0) {
+            await sock.sendMessage(remoteJid, {
+              text: 'ℹ️ *Nenhum chat com presença fake ativa no momento.*'
+            }, { quoted: m });
+            return;
+          }
+
+          let listText = `📋 *CHATS COM PRESENÇA FAKE ATIVA (${activeJids.length})*\n\n`;
+          for (let i = 0; i < activeJids.length; i++) {
+            const jid = activeJids[i];
+            const info = config.typingChats[jid];
+            const mode = (typeof info === 'object' ? info?.mode : info) || 'composing';
+            let name = (typeof info === 'object' && info?.name) ? info.name : '';
+
+            if (!name) {
+              name = await getChatDisplayName(jid);
+              if (typeof config.typingChats[jid] === 'object') {
+                config.typingChats[jid].name = name;
+              }
+            }
+
+            const modeDesc = mode === 'recording'
+              ? '🎙️ Gravando áudio...'
+              : mode === 'available'
+              ? '🟢 Online'
+              : '⌨️ Digitando...';
+
+            listText += `${i + 1}. *${name}*\n   • Modo: ${modeDesc}\n   • Tipo: ${jid.endsWith('@g.us') ? '👥 Grupo' : '👤 Privado'}\n   • JID: \`${jid}\`\n\n`;
+          }
+
+          saveConfig();
+          await sock.sendMessage(remoteJid, { text: listText.trim() }, { quoted: m });
+          return;
+        }
+
+        // 3. Desativar explicitamente no chat atual (!parar, .parar, !stop, .stop, .digita parar, .digita off)
+        const isExplicitOff = ['parar', 'stop'].includes(cmd) ||
+                              ['off', '0', 'desativar', 'parar', 'stop', 'nao', 'não', 'false'].includes(subcmd);
+
+        if (isExplicitOff) {
+          if (config.typingChats[remoteJid]) {
+            delete config.typingChats[remoteJid];
+            saveConfig();
+            try {
+              await sock.sendPresenceUpdate('paused', remoteJid);
+            } catch {}
+            await sock.sendMessage(remoteJid, {
+              text: '⏹️ *Presença Fake Parada:* Desativada com sucesso neste chat.'
+            }, { quoted: m });
+          } else {
+            await sock.sendMessage(remoteJid, {
+              text: 'ℹ️ A presença fake já não estava ativa neste chat.'
+            }, { quoted: m });
+          }
+          return;
+        }
+
+        // 4. Determinar o modo alvo (Toggle: o mesmo comando liga e desliga)
+        let targetMode = 'composing';
+        if (['grava', 'gravando', 'audio', 'áudio', 'rec'].includes(cmd) || ['grava', 'gravando', 'audio', 'áudio', 'rec', 'voz'].includes(subcmd)) {
+          targetMode = 'recording';
+        } else if (['online', 'disp'].includes(cmd) || ['online', 'disp', 'disponivel', 'disponível', 'available'].includes(subcmd)) {
+          targetMode = 'available';
+        } else {
+          targetMode = 'composing';
+        }
+
+        const current = config.typingChats[remoteJid];
+        const currentMode = typeof current === 'object' ? current?.mode : current;
+
+        // Se já está ativo NO MESMO MODO -> DESLIGA (Toggle OFF)
+        if (current && currentMode === targetMode) {
+          delete config.typingChats[remoteJid];
+          saveConfig();
+          try {
+            await sock.sendPresenceUpdate('paused', remoteJid);
+          } catch {}
+
+          const label = targetMode === 'recording'
+            ? '🎙️ *Gravando áudio...*'
+            : targetMode === 'available'
+            ? '🟢 *Online*'
+            : '⌨️ *Digitando...*';
+
+          await sock.sendMessage(remoteJid, {
+            text: `⏹️ ${label} *DESATIVADO* neste chat.`
+          }, { quoted: m });
+          return;
+        }
+
+        // Se não está ativo ou estava em outro modo -> LIGA (Toggle ON)
+        const chatName = await getChatDisplayName(remoteJid);
+        config.typingChats[remoteJid] = {
+          mode: targetMode,
+          name: chatName,
+          updatedAt: Date.now()
+        };
+        saveConfig();
+        try {
+          await sock.sendPresenceUpdate(targetMode, remoteJid);
+        } catch {}
+
+        const label = targetMode === 'recording'
+          ? '🎙️ *Gravando áudio...*'
+          : targetMode === 'available'
+          ? '🟢 *Online*'
+          : '⌨️ *Digitando...*';
+
+        const toggleCmd = targetMode === 'recording'
+          ? `${prefix}grava`
+          : targetMode === 'available'
+          ? `${prefix}online`
+          : `${prefix}digita`;
+
+        await sock.sendMessage(remoteJid, {
+          text: `✅ ${label} *ATIVADO* neste chat!`
+        }, { quoted: m });
       }
     }
   });

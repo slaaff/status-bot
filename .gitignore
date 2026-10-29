@@ -5,3 +5,7 @@ qr.txt
 stats.json
 *.log
 .DS_Store
+*.bak*
+*.old*
+.yarn/
+.yarnrc.yml

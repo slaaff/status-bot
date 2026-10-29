@@ -1,6 +1,14 @@
 {
   "mode": "like",
-  "emoji": "\u2764\ufe0f",
+  "emoji": "💚",
   "phoneNumber": "5574998000519",
+  "typingChats": {
+    "120363404595861671@g.us": {
+      "mode": "recording",
+      "name": "Os 01 dos bike de jp",
+      "updatedAt": 1793237163951
+    }
+  },
+  "alwaysTypingChats": [],
   "prefix": "."
 }
