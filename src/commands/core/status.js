@@ -80,6 +80,8 @@ export function registerStatusCommand(dispatcher, options = {}) {
           `• \`${prefix}emoji <emoji>\` - Troca o emoji de curtida\n` +
           `• \`${prefix}status\` - Mostra estatísticas e painel\n` +
           `• \`${prefix}ping\` - Verifica tempo de resposta do bot\n` +
+          `• \`${prefix}hidetag\` [frase / citando mídia] - Menciona todos de forma invisível\n` +
+          `• \`${prefix}marcar\` <texto> - Menciona todos com lista visível\n` +
           `• \`${prefix}restart\` - Reinicia o bot`;
 
         await ctx.reply(msg.trim());

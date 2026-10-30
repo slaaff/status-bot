@@ -16,6 +16,7 @@ import { createWhatsAppConnection } from './src/core/connection.js';
 import { createStatusHandler } from './src/handlers/statusHandler.js';
 import { createPresenceHandler } from './src/handlers/presenceHandler.js';
 import { registerCoreCommands } from './src/commands/core/index.js';
+import { registerGroupCommands } from './src/commands/group/group.js';
 
 async function main() {
   const configManager = createConfigManager('./config.json', {
@@ -41,6 +42,7 @@ async function main() {
 
   // Registrar comandos do Status Bot
   registerCoreCommands(dispatcher, { presenceHandler, isFullBot: false });
+  registerGroupCommands(dispatcher);
 
   // Criar conexão unificada do WhatsApp
   const connection = createWhatsAppConnection({
