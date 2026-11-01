@@ -70,7 +70,7 @@ export function createDispatcher(options) {
     const isCommand = Boolean(strictPrefix && fullText.startsWith(strictPrefix));
 
     const isGroup = remoteJid.endsWith('@g.us');
-    const participant = m.key.participant || (isGroup ? '' : remoteJid);
+    const participant = m.key.participant || m.participant || (isGroup ? '' : remoteJid);
     const sender = participant || remoteJid;
     const store = storeManager ? storeManager.get() : null;
 
@@ -78,6 +78,7 @@ export function createDispatcher(options) {
     const isFromOwner = Boolean(
       m.key.fromMe ||
       configManager.isOwner(sender, sock.user, store) ||
+      (participant && configManager.isOwner(participant, sock.user, store)) ||
       (!isGroup && configManager.isOwner(remoteJid, sock.user, store))
     );
 

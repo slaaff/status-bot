@@ -10,6 +10,7 @@
 import fs from 'fs';
 import path from 'path';
 import { logger } from './logger.js';
+import { resolveLidToPhone } from './phoneUtils.js';
 
 export function createConfigManager(customConfigPath = './config.json', botDefaults = {}) {
   const filePath = path.resolve(customConfigPath);
@@ -274,7 +275,15 @@ export function createConfigManager(customConfigPath = './config.json', botDefau
     // 1. Validação O(1) no Set pré-indexado (contém todas variações de telefones e LIDs dos donos)
     if (cachedOwnerSet.has(cleanSender)) return true;
 
-    // 2. Compara com a sessão ativa conectada do Baileys (telefone ou LID)
+    // 2. Resolve LID para telefone caso seja um LID conhecido ou mapeado na sessão
+    try {
+      const resolved = resolveLidToPhone(cleanSender);
+      if (resolved && resolved !== cleanSender && cachedOwnerSet.has(resolved)) {
+        return true;
+      }
+    } catch {}
+
+    // 3. Compara com a sessão ativa conectada do Baileys (telefone ou LID)
     if (sockUser?.id) {
       const botNum = sockUser.id.split('@')[0].split(':')[0].replace(/\D/g, '');
       if (cleanSender === botNum || isSamePhone(cleanSender, botNum)) return true;
@@ -284,7 +293,7 @@ export function createConfigManager(customConfigPath = './config.json', botDefau
       if (cleanSender === botLid) return true;
     }
 
-    // 3. Compara com JIDs/LIDs salvos dinamicamente no store
+    // 4. Compara com JIDs/LIDs salvos dinamicamente no store
     if (store && Array.isArray(store.ownerChatJids)) {
       for (const jid of store.ownerChatJids) {
         if (!jid) continue;
@@ -293,7 +302,7 @@ export function createConfigManager(customConfigPath = './config.json', botDefau
       }
     }
 
-    // 4. Validação com tolerância a 9 dígitos para telefones
+    // 5. Validação com tolerância a 9 dígitos para telefones
     for (const owner of cachedOwnerPhones) {
       if (isSamePhone(cleanSender, owner)) return true;
     }
