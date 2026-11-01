@@ -1,13 +1,13 @@
 /**
  * Comandos de Controle Mestre e Acesso Público
- * .bot [on/off], .ativar, .desativar, .comandos [on/off], .publico [on/off]
+ * .bot [on/off], .comandos [on/off], .publico [on/off]
  */
 
 export function registerBotControlCommands(dispatcher) {
-  // 1. Controle Mestre de Comandos: .bot / .ativar / .desativar / .comandos
+  // 1. Controle Mestre de Comandos: .bot / .comandos
   dispatcher.registerCommand({
     name: 'bot',
-    aliases: ['ativar', 'desativar', 'comandos', 'botstatus'],
+    aliases: ['comandos', 'botstatus'],
     ownerOnly: true,
     description: 'Ativa ou desativa o processamento geral de comandos do bot',
     execute: async (ctx) => {
@@ -15,12 +15,12 @@ export function registerBotControlCommands(dispatcher) {
       const opt = (args[0] || '').toLowerCase();
 
       let newState;
-      if (['ativar', 'on', 'ligar', '1', 'sim', 'true'].includes(command) || ['on', '1', 'ativar', 'ligar', 'sim', 'true'].includes(opt)) {
+      if (['on', '1', 'ativar', 'ligar', 'sim', 'true'].includes(opt)) {
         newState = true;
-      } else if (['desativar', 'off', 'desligar', '0', 'nao', 'não', 'false'].includes(command) || ['off', '0', 'desativar', 'desligar', 'nao', 'não', 'false'].includes(opt)) {
+      } else if (['off', '0', 'desativar', 'desligar', 'nao', 'não', 'false'].includes(opt)) {
         newState = false;
       } else {
-        // Toggle
+        // Toggle se nenhum argumento for passado
         newState = !ctx.config.commandsEnabled;
       }
 
@@ -32,7 +32,7 @@ export function registerBotControlCommands(dispatcher) {
         );
       } else {
         await ctx.reply(
-          `🛑 *Comandos Desativados!*\n\nTodos os comandos foram pausados. Para reativar, envie \`${prefix}bot on\` ou \`${prefix}ativar\`.`
+          `🛑 *Comandos Desativados!*\n\nTodos os comandos foram pausados. Para reativar, envie \`${prefix}bot on\`.`
         );
       }
     }

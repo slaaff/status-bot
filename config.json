@@ -14,10 +14,21 @@
   "commandsEnabled": true,
   "allowPublicCommands": false,
   "mode": "like",
+  "emoji": "❤️",
   "autoViewStatus": false,
   "autoLikeStatus": true,
-  "emoji": "💚",
-  "autoLikeEmoji": "💚",
+  "autoLikeEmoji": "❤️",
+  "autoDownload": false,
+  "autoDeleteWord": false,
+  "autoAnimeNotify": false,
   "typingChats": {},
-  "alwaysTypingChats": []
+  "alwaysTypingChats": [],
+  "stickerPack": "WhatsApp Bot",
+  "stickerAuthor": "Bot",
+  "statusTarget": "all",
+  "statusIgnored": [
+    "558581334462",
+    "5585981334462"
+  ],
+  "statusSelected": []
 }

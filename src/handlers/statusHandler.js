@@ -2,11 +2,14 @@
  * Handler Unificado de WhatsApp Status (Stories)
  * - Visualização automática (readMessages)
  * - Curtida automática com preservação do círculo verde (sendMessage react statusJidList)
- * - Rastreamento de visualizações recebidas nos status da própria conta (message-receipt.update / messages.update)
+ * - Filtro mestre: se mode for 'off', não visualiza e nem curte
+ * - Lista de Bloqueados / Ignorados (statusIgnored): nunca visualiza nem curte contatos na lista
+ * - Modo Alvo (statusTarget): 'all' (todos menos ignorados) ou 'selected' (somente contatos em statusSelected)
  * - Deduplicação em memória (máx 3000 status)
  */
 
 import { logger } from '../core/logger.js';
+import { normalizePhone, isPhoneInList } from '../core/phoneUtils.js';
 
 export function createStatusHandler(options) {
   const { configManager, storeManager } = options;
@@ -36,8 +39,31 @@ export function createStatusHandler(options) {
     if (isAlreadyProcessed(m.key.id)) return;
 
     const cfg = configManager.get();
-    const shouldView = Boolean(cfg.autoViewStatus || cfg.mode === 'view' || cfg.mode === 'both');
-    const shouldLike = Boolean(cfg.autoLikeStatus || cfg.mode === 'like' || cfg.mode === 'both');
+
+    // 1. Verificação Mestre de Modo Desligado
+    if (cfg.mode === 'off') {
+      return;
+    }
+
+    const senderPhone = normalizePhone(participant);
+
+    // 2. Filtro de Bloqueados / Ignorados (Blacklist)
+    if (isPhoneInList(senderPhone, cfg.statusIgnored || [])) {
+      logger.status('STATUS', `⛔ Status de +${senderPhone} IGNORADO (está na lista de bloqueados/ignorados)`);
+      return;
+    }
+
+    // 3. Filtro de Modo Alvo (Target: 'all' vs 'selected')
+    const targetMode = (cfg.statusTarget || 'all').toLowerCase();
+    if (targetMode === 'selected' || targetMode === 'selecionados') {
+      if (!isPhoneInList(senderPhone, cfg.statusSelected || [])) {
+        logger.status('STATUS', `⏭️ Status de +${senderPhone} IGNORADO (modo selecionados ativo e contato não está na lista)`);
+        return;
+      }
+    }
+
+    const shouldView = Boolean(cfg.mode === 'view' || cfg.mode === 'both' || (cfg.mode !== 'off' && cfg.autoViewStatus));
+    const shouldLike = Boolean(cfg.mode === 'like' || cfg.mode === 'both' || (cfg.mode !== 'off' && cfg.autoLikeStatus));
 
     if (!shouldView && !shouldLike) return;
 
@@ -47,7 +73,7 @@ export function createStatusHandler(options) {
         id: m.key.id,
         participant: participant
       };
-      const sender = participant.split('@')[0] || 'Contato';
+      const sender = senderPhone || participant.split('@')[0] || 'Contato';
 
       // 1. Marcar como Visto (apenas se shouldView for verdadeiro)
       if (shouldView) {

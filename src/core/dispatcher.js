@@ -1,11 +1,12 @@
 /**
  * Despachante Central de Mensagens e Comandos
  * - Roteamento ultra-rápido de comandos via Map O(1)
- * - Validação estrita de prefixo ('!' para whatsapp-bot, '.' para status-bot)
- * - Trava mestre de comandos (.bot on/off, .ativar)
+ * - Validação estrita de prefixo obrigatório ('!' para whatsapp-bot, '.' para status-bot) - sem comandos sem prefixo
+ * - Suporte a comandos colados/juntos com prefixo (ex: .statuslista, .statislista, .statustodos, .statusdesativar)
+ * - Trava mestre de comandos (.bot on/off)
  * - Trava de acesso público (.publico on/off): quando público estiver off, responde exclusivamente aos donos
  * - Reconhecimento e aprendizado dinâmico de identificadores dos dois donos (LID e telefone)
- * - Hooks passivos modulares (anti-link, downloads automáticos, apagar mensagem)
+ * - Hooks passivos modulares (anti-link, downloads automáticos)
  */
 
 import { logger } from './logger.js';
@@ -64,19 +65,16 @@ export function createDispatcher(options) {
     const fullText = extractMessageText(m);
     const config = configManager.get();
 
-    // 1. Prefixo Estrito (WhatsApp bot: estritamente '!', Status bot: estritamente '.')
+    // 1. Prefixo Estrito Obrigatório (WhatsApp bot: '!', Status bot: '.')
     const strictPrefix = config.prefix || '.';
-    const isCommand = fullText.startsWith(strictPrefix);
+    const isCommand = Boolean(strictPrefix && fullText.startsWith(strictPrefix));
 
     const isGroup = remoteJid.endsWith('@g.us');
     const participant = m.key.participant || (isGroup ? '' : remoteJid);
     const sender = participant || remoteJid;
     const store = storeManager ? storeManager.get() : null;
 
-    // Reconhecimento dos donos:
-    // - Mensagem enviada pelo próprio WhatsApp do bot / Web WhatsApp (m.key.fromMe)
-    // - Remetente da mensagem (sender / participant)
-    // - Em chat privado (DM), o remoteJid identifica diretamente o usuário
+    // Reconhecimento dos donos
     const isFromOwner = Boolean(
       m.key.fromMe ||
       configManager.isOwner(sender, sock.user, store) ||
@@ -126,14 +124,10 @@ export function createDispatcher(options) {
       }
     };
 
-    // 2. Se NÃO for comando com prefixo estrito, avalia hooks passivos apenas se permitido
+    // 2. Se NÃO for comando com prefixo, avalia hooks passivos
     if (!isCommand) {
-      // Se comandos/bot estiverem desativados e não for dono, não processa hooks passivos
       if (config.commandsEnabled === false && !isFromOwner) return;
 
-      // Se público estiver desativado (público off) e NÃO for dono:
-      // O bot NÃO responde a ninguém além dos dois donos.
-      // Apenas hooks estritos de moderação/segurança de grupo (como antilink) podem rodar se o grupo estiver protegido.
       if (!config.allowPublicCommands && !isFromOwner) {
         for (const hook of passiveHooks) {
           try {
@@ -159,36 +153,58 @@ export function createDispatcher(options) {
       return;
     }
 
-    // 3. Processamento Estrito do Comando
+    // 3. Processamento Estrito do Comando (Requer prefixo obrigatoriamente)
+    if (!fullText.startsWith(strictPrefix)) return;
     const cleanText = fullText.slice(strictPrefix.length).trim();
     if (!cleanText) return;
 
     const spaceIndex = cleanText.indexOf(' ');
-    const commandName = (spaceIndex === -1 ? cleanText : cleanText.slice(0, spaceIndex)).toLowerCase();
+    let commandName = (spaceIndex === -1 ? cleanText : cleanText.slice(0, spaceIndex)).toLowerCase();
     const argText = spaceIndex === -1 ? '' : cleanText.slice(spaceIndex + 1).trim();
-    const args = argText ? argText.split(/\s+/) : [];
+    let args = argText ? argText.split(/\s+/) : [];
 
-    const resolvedName = aliases.get(commandName) || commandName;
-    const cmdDef = commands.get(resolvedName);
+    // Suporte especial a comandos colados/juntos (ex: statuslista, statislista, statustodos, statusdesativar, stlista)
+    const statusJoinedMatch = commandName.match(/^(?:status|statis|st)(lista|todos|selecionados|desativar|bloquear|ativar|liberar|add|del|remover|limpar|off|on)$/i);
+    if (statusJoinedMatch && !commands.has(commandName)) {
+      const sub = statusJoinedMatch[1].toLowerCase();
+      commandName = 'status';
+      args = [sub, ...args];
+    }
+
+    let resolvedName = aliases.get(commandName) || commandName;
+    let cmdDef = commands.get(resolvedName);
+
+    // Se o comando não foi encontrado diretamente, tenta resolver subcomandos de status
+    if (!cmdDef && (commandName.startsWith('status') || commandName.startsWith('statis'))) {
+      const remainder = commandName.replace(/^(?:status|statis)/i, '');
+      if (remainder) {
+        resolvedName = 'status';
+        cmdDef = commands.get('status');
+        args = [remainder, ...args];
+      }
+    }
 
     if (!cmdDef) return;
 
     // 4. Trava Mestre: Comandos Ativados/Desativados
-    // Comandos de ativação mestre (.bot, .ativar, .comandos, .publico) são sempre permitidos para o dono
-    const isActivationCmd = ['bot', 'ativar', 'desativar', 'comandos', 'publico'].includes(resolvedName);
-    if (config.commandsEnabled === false && !isActivationCmd) {
+    // Comandos essenciais de status e controle nunca são bloqueados para o dono
+    const isExemptCmd = [
+      'bot', 'ativar', 'desativar', 'desligar', 'comandos', 'publico',
+      'status', 'st', 'statuslista', 'menu', 'ajuda', 'ping'
+    ].includes(resolvedName);
+
+    if (config.commandsEnabled === false && !isExemptCmd) {
       if (isFromOwner) {
         await ctx.reply(
-          `⚠️ *Comandos Desativados!*\n\nEnvie \`${strictPrefix}bot on\` ou \`${strictPrefix}ativar\` para ligar todos os comandos.`
+          `⚠️ *Comandos Desativados!*\n\nEnvie \`${strictPrefix}bot on\` para ligar todos os comandos.`
         );
       }
       return;
     }
 
-    // 5. Trava do Público: Se público estiver OFF (allowPublicCommands === false), responde SOMENTE aos dois donos!
+    // 5. Trava do Público: Se público estiver OFF, responde SOMENTE aos donos
     if (!isFromOwner) {
       if (!config.allowPublicCommands) {
-        // Se desativado pro público, ignora silenciosamente requisições de outros
         logger.info('DISPATCHER', `Comando ${strictPrefix}${commandName} ignorado (Público OFF e remetente não é dono: +${ctx.senderNum})`);
         return;
       }
