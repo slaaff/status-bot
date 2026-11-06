@@ -3,6 +3,8 @@
  * .ping (status-bot) / !ping (whatsapp-bot)
  */
 
+import fs from 'fs';
+import os from 'os';
 import { logger } from '../../core/logger.js';
 
 export function registerPingCommand(dispatcher) {
@@ -16,6 +18,9 @@ export function registerPingCommand(dispatcher) {
       const msgTimeMs = (typeof rawTimestamp === 'number' ? rawTimestamp * 1000 : Number(rawTimestamp) * 1000) || now;
       const inboundLatency = Math.max(0, now - msgTimeMs);
 
+      const isTermux = fs.existsSync('/data/data/com.termux') || !!process.env.TERMUX_VERSION || (os.release && os.release().includes('PRoot'));
+      const hostDesc = isTermux ? '📱 Samsung Galaxy S21 FE' : `☁️ VPS Cloud (${os.hostname()})`;
+
       const ramMB = (process.memoryUsage().rss / (1024 * 1024)).toFixed(1);
       const uptimeSec = Math.floor(process.uptime());
       const h = Math.floor(uptimeSec / 3600);
@@ -26,6 +31,7 @@ export function registerPingCommand(dispatcher) {
       await ctx.reply(
         `🏓 *Pong!*\n\n` +
         `⚡ *Processamento:* ${inboundLatency}ms\n` +
+        `🌐 *Hospedagem:* ${hostDesc}\n` +
         `💾 *RAM:* ${ramMB} MB\n` +
         `⏱️ *Uptime:* ${h}h ${m}m ${s}s\n` +
         `⚙️ *Prefixo:* \`${ctx.prefix}\`\n` +
