@@ -367,47 +367,44 @@ export function registerStatusCommand(dispatcher, options = {}) {
         return ctx.reply(`💡 Use: \`${prefix}status limpar ignorados\` ou \`${prefix}status limpar selecionados\``);
       }
 
-      // 9. PAINEL GERAL (Quando chamado sem argumentos: .status ou .statis ou com subcomando de info/hardware/sistema)
-      const sysInfo = getSystemHardwareSoftwareInfo();
-      const modoDesc = cfg.mode === 'both'
-        ? `Ambos (Ver e Curtir) ✨ (${cfg.emoji || '❤️'})`
-        : cfg.mode === 'like'
-        ? `Apenas Curtir 🟢 (${cfg.emoji || '❤️'}) (Círculo Verde Preservado)`
-        : cfg.mode === 'view'
-        ? 'Apenas Visualizar 👁️'
-        : 'Desligado ❌';
-
-      const targetDesc = (cfg.statusTarget === 'selected' || cfg.statusTarget === 'selecionados')
-        ? 'Apenas Selecionados 🎯'
-        : 'Todos os Contatos 👥';
-
+      // 9. PAINEL GERAL (Quando chamado sem argumentos: .status ou !status)
+      const isPublic = cfg.allowPublicCommands ? 'Público' : 'Restrito';
+      const cmdsStatus = cfg.commandsEnabled !== false ? '✅' : '❌';
       const presenceCount = Object.keys(store.typingChats || cfg.typingChats || {}).length;
       const ignoredCount = Array.isArray(cfg.statusIgnored) ? new Set(cfg.statusIgnored).size : 0;
       const selectedCount = Array.isArray(cfg.statusSelected) ? new Set(cfg.statusSelected).size : 0;
 
-      let msg = `📊 *PAINEL DO BOT* 📊\n\n` +
-        `${sysInfo}\n\n` +
-        `⚙️ *CONFIGURAÇÕES & FUNÇÕES*\n` +
-        `• *Comandos:* ${cfg.commandsEnabled ? 'Ativados ✅' : 'Desativados 🛑'}\n` +
-        `• *Público:* ${cfg.allowPublicCommands ? 'Liberado ✅' : 'Restrito aos Donos 🔒'}\n` +
-        `• *Modo de Status:* ${modoDesc}\n` +
-        `• *Alvo de Status:* ${targetDesc}\n` +
-        `• *Bloqueados:* ${ignoredCount} contato(s)\n` +
-        `• *Selecionados:* ${selectedCount} contato(s)\n` +
-        `• *Status Vistos:* ${store.statusViewedCount || 0}\n` +
-        `• *Views Recebidas (Status):* ${store.statusViewsReceivedCount || 0}\n` +
-        `• *Status Curtidos:* ${store.statusLikedCount || 0}\n` +
-        `• *Presença Fake:* ${presenceCount} chat(s) ativo(s)\n`;
+      let msg = `⚙️ *PAINEL ATIVO*\n`;
 
       if (isFullBot) {
-        msg += `• *Figurinhas Feitas:* ${store.stickersCreatedCount || 0}\n` +
-               `• *Músicas Baixadas:* ${store.musicDownloadedCount || 0}\n` +
-               `• *Auto-Download:* ${cfg.autoDownload ? 'Ativado ✅' : 'Desativado ❌'}\n` +
-               `• *Auto-Apagar:* ${cfg.autoDeleteWord ? 'Ativado ✅' : 'Desativado ❌'}\n` +
-               `• *Notificação Anime:* ${cfg.autoAnimeNotify ? 'Ativado ✅' : 'Desativado ❌'}\n`;
+        const botName = cfg.botName || 'Meu Assistente';
+        const dlStatus = cfg.autoDownload !== false ? '✅' : '❌';
+        const delStatus = cfg.autoDeleteWord !== false ? '✅' : '❌';
+        const animeStatus = cfg.autoAnimeNotify !== false ? '✅' : '❌';
+        const figs = store.stickersCreatedCount || 0;
+        const mus = store.musicDownloadedCount || 0;
+
+        msg += `🤖 *${botName} (!):* ${isPublic} | Cmds ${cmdsStatus}\n` +
+               `• *Funções (!):* DL ${dlStatus} | Del ${delStatus} | Anime ${animeStatus} | Fake: ${presenceCount} | ${figs} fig | ${mus} mús\n`;
+      } else {
+        const botName = cfg.botName || 'Status Bot Pessoal';
+        const modoDesc = cfg.mode === 'both'
+          ? `Ver e Curtir ✨ (${cfg.emoji || '❤️'})`
+          : cfg.mode === 'like'
+          ? `Só Curtir ${cfg.emoji || '❤️'}`
+          : cfg.mode === 'view'
+          ? 'Só Ver 👁️'
+          : 'Desligado ❌';
+        const targetDesc = (cfg.statusTarget === 'selected' || cfg.statusTarget === 'selecionados') ? 'Selecionados' : 'Todos';
+        const likes = store.statusLikedCount || 0;
+        const vistos = store.statusViewedCount || 0;
+        const views = store.statusViewsReceivedCount || 0;
+
+        msg += `👁️ *${botName} (.):* ${modoDesc} | ${targetDesc} (${ignoredCount} bloq | ${selectedCount} sel)\n` +
+               `• *Stats (.):* ${likes} ❤️ | ${vistos} 👀 | ${views} views\n`;
       }
 
-      msg += `\n_Envie \`${prefix}status lista\` para ver e gerenciar os contatos._`;
+      msg += `_Envie \`${prefix}status lista\` para gerenciar os contatos._`;
 
       await ctx.reply(msg.trim());
     }
