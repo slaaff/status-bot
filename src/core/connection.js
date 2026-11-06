@@ -172,6 +172,12 @@ export function createWhatsAppConnection(options) {
 
         if (onClose) onClose(statusCode, shouldReconnect);
 
+        // Previne vazamento de memória (Memory Leak) removendo todos os listeners antes de reconectar
+        try {
+          sock.ev.removeAllListeners();
+          sock.ws?.close();
+        } catch {}
+
         if (shouldReconnect) {
           if (!isReconnecting) {
             isReconnecting = true;

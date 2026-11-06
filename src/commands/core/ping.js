@@ -42,36 +42,20 @@ export function registerPingCommand(dispatcher) {
   dispatcher.registerCommand({
     name: 'ping',
     aliases: ['p', 'speed', 'latencia'],
-    description: 'Verifica a latência e o status do sistema do bot',
+    description: 'Verifica a latência do bot em milissegundos',
     execute: async (ctx) => {
       const now = Date.now();
       const receivedAt = ctx.m?.receivedAt || now;
       const procTime = Math.max(1, now - receivedAt);
 
       // Latência real do bot: processamento interno + roundtrip WebSocket (VPS <-> WhatsApp Edge)
-      // O timestamp padrão do WhatsApp é em segundos inteiros, o que gerava truncamento artificial de ~1000ms.
       const jitter = (now % 14);
       const latency = Math.max(18, procTime + 16 + jitter);
 
-      const cfg = ctx.config || {};
-      const botName = cfg.botName || (ctx.prefix === '!' ? 'Meu Assistente' : 'Status Bot Pessoal');
-      const osName = getDetectedOS();
-      const nodeVer = process.version.split('.')[0];
-      const botUptime = formatSec(process.uptime());
-      const hostUptime = formatSec(os.uptime());
-      const load = (os.loadavg()[0] || 0).toFixed(2);
-      const totalMB = Math.round(os.totalmem() / (1024 * 1024));
-      const usedMB = Math.round((os.totalmem() - os.freemem()) / (1024 * 1024));
-      const pct = Math.round((usedMB / totalMB) * 100);
-      const botMB = Math.round(process.memoryUsage().rss / (1024 * 1024));
-
-      const msg = `⚡ *${botName}* • *${latency}ms* 🏓\n` +
-        `🌐 *Sistema:* ${osName} | Node ${nodeVer}\n` +
-        `⏱️ *Uptime:* Bot ${botUptime} | Host ${hostUptime}\n` +
-        `📊 *Recursos:* RAM ${usedMB}/${totalMB}MB (${pct}%) | Bot ${botMB}MB | CPU ${load}`;
+      const msg = `Pong! 🏓\nLatência: ${latency}ms`;
 
       await ctx.reply(msg);
-      logger.info('PING', `Ping respondido por ${botName} (${latency}ms | ${osName})`);
+      logger.info('PING', `Pong respondido (${latency}ms)`);
     }
   });
 }

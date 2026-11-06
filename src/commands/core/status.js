@@ -393,15 +393,9 @@ export function registerStatusCommand(dispatcher, options = {}) {
       }
 
       // 9. PAINEL GERAL (Quando chamado sem argumentos: .status ou !status)
-      const osName = getDetectedOS();
-      const totalMB = Math.round(os.totalmem() / (1024 * 1024));
-      const usedMB = Math.round((os.totalmem() - os.freemem()) / (1024 * 1024));
-      const pct = Math.round((usedMB / totalMB) * 100);
-      const isPublic = cfg.allowPublicCommands ? 'Público 👥' : 'Restrito 🔒';
-      const cmdsStatus = cfg.commandsEnabled !== false ? 'Ativos ✅' : 'Desativados ❌';
+      const isPublic = cfg.allowPublicCommands ? 'Público' : 'Restrito';
+      const cmdsStatus = cfg.commandsEnabled !== false ? '✅' : '❌';
       const presenceCount = Object.keys(store.typingChats || cfg.typingChats || {}).length;
-      const ignoredCount = Array.isArray(cfg.statusIgnored) ? new Set(cfg.statusIgnored).size : 0;
-      const selectedCount = Array.isArray(cfg.statusSelected) ? new Set(cfg.statusSelected).size : 0;
 
       let msg = '';
 
@@ -413,30 +407,32 @@ export function registerStatusCommand(dispatcher, options = {}) {
         const figs = store.stickersCreatedCount || 0;
         const mus = store.musicDownloadedCount || 0;
 
-        msg = `🤖 *${botName.toUpperCase()}* • *STATUS*\n` +
-              `🌐 *Host:* ${osName} | RAM: ${usedMB}/${totalMB}MB (${pct}%)\n` +
-              `⚙️ *Estado:* Comandos ${cmdsStatus} (${isPublic})\n` +
-              `📦 *Módulos:* Download ${dlStatus} | Anti-Delete ${delStatus} | Animes ${animeStatus}\n` +
-              `📊 *Atividade:* ${figs} figurinhas • ${mus} músicas baixadas • Fake: ${presenceCount}`;
+        msg = `⚙️ *PAINEL ATIVO*\n` +
+              `🤖 *${botName} (!):* ${isPublic} | *Cmds:* ${cmdsStatus}\n\n` +
+              `📌 *Funções (!):*\n` +
+              `• *Downloads:* ${dlStatus} | *Delete:* ${delStatus} | *Anime:* ${animeStatus}\n\n` +
+              `📊 *Resumo:*\n` +
+              `• *Fake:* ${presenceCount} | *Figurinhas:* ${figs} | *Músicas:* ${mus}`;
       } else {
         const botName = cfg.botName || 'Status Bot Pessoal';
         const modoDesc = cfg.mode === 'both'
-          ? `Ver e Curtir ✨ (${cfg.emoji || '❤️'})`
+          ? 'Ver e Curtir ✨'
           : cfg.mode === 'like'
-          ? `Só Curtir ${cfg.emoji || '❤️'}`
+          ? 'Só Curtir ❤️'
           : cfg.mode === 'view'
           ? 'Só Ver 👁️'
           : 'Desligado ❌';
-        const targetDesc = (cfg.statusTarget === 'selected' || cfg.statusTarget === 'selecionados') ? 'Apenas Selecionados 🎯' : 'Todos os Contatos 👥';
+        const targetDesc = (cfg.statusTarget === 'selected' || cfg.statusTarget === 'selecionados') ? 'Selecionados' : 'Todos';
         const likes = store.statusLikedCount || 0;
         const vistos = store.statusViewedCount || 0;
         const views = store.statusViewsReceivedCount || 0;
 
-        msg = `👁️ *${botName.toUpperCase()}* • *STATUS*\n` +
-              `🌐 *Host:* ${osName} | RAM: ${usedMB}/${totalMB}MB (${pct}%)\n` +
-              `⚙️ *Modo:* ${modoDesc} | Alvo: ${targetDesc}\n` +
-              `📊 *Estatísticas:* ${likes} curtidos ❤️ • ${vistos} vistos 👀 • ${views} views\n` +
-              `👥 *Filtros:* ${ignoredCount} bloqueado(s) • ${selectedCount} selecionado(s)\n` +
+        msg = `⚙️ *PAINEL ATIVO*\n` +
+              `👁️ *${botName} (.):* ${modoDesc} | *Cmds:* ${cmdsStatus}\n\n` +
+              `📌 *Funções (.):*\n` +
+              `• *Alvo:* ${targetDesc} | *Emoji:* ${cfg.emoji || '❤️'}\n\n` +
+              `📊 *Resumo:*\n` +
+              `• *Curtidos:* ${likes} | *Vistos:* ${vistos} | *Views:* ${views}\n\n` +
               `_Envie \`${prefix}status lista\` para gerenciar os contatos._`;
       }
 

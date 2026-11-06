@@ -3,9 +3,10 @@ module.exports = {
     {
       name: 'status-bot',
       script: 'index.js',
-      cwd: '/home/ubuntu/status-bot',
-      node_args: '--max-old-space-size=200 --expose-gc',
-      max_memory_restart: '220M',
+      exec_mode: 'fork',
+      instances: 1,
+      node_args: '--expose-gc',
+      max_memory_restart: '350M',
       kill_timeout: 8000,
       exp_backoff_restart_delay: 2000,
       log_date_format: 'YYYY-MM-DD HH:mm:ss',

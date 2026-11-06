@@ -82,14 +82,14 @@ async function main() {
     }
   });
 
-  // Coletor periódico de memória para evitar vazamentos e OOM
+  // Coletor periódico de memória a cada 30 minutos para evitar vazamentos e OOM
   setInterval(() => {
-    if (typeof global.gc === 'function') {
+    if (global.gc) {
       try {
         global.gc();
       } catch {}
     }
-  }, 3 * 60 * 1000);
+  }, 30 * 60 * 1000);
 
   // Iniciar conexão
   await connection.connect();
