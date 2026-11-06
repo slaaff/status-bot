@@ -4,8 +4,116 @@
  * Suporta também comandos colados: .statuslista, .statislista, .statustodos, .statusdesativar, etc.
  */
 
+import fs from 'fs';
+import os from 'os';
+import { execSync } from 'child_process';
 import { formatPhone, getPhoneVariants, normalizePhone } from '../../core/phoneUtils.js';
 import { extractTargetContact } from './statusControl.js';
+
+function getSystemHardwareSoftwareInfo() {
+  // 1. Detecção de Hospedagem / Host
+  const isTermux = fs.existsSync('/data/data/com.termux') || !!process.env.TERMUX_VERSION || (os.release && os.release().includes('PRoot'));
+  let hostDesc = '';
+  if (isTermux) {
+    hostDesc = '📱 Samsung Galaxy S21 FE (Termux / Failover Node)';
+  } else {
+    const hostname = os.hostname();
+    hostDesc = `☁️ Servidor VPS Cloud (${hostname})`;
+  }
+
+  // 2. Sistema Operacional
+  let osName = `${os.type()} ${os.release()}`;
+  try {
+    if (fs.existsSync('/etc/os-release')) {
+      const content = fs.readFileSync('/etc/os-release', 'utf8');
+      const match = content.match(/PRETTY_NAME="?([^"\n]+)"?/);
+      if (match) osName = match[1];
+    }
+  } catch (e) {}
+  const osArch = os.arch();
+
+  // 3. Hardware - CPU
+  const cpus = os.cpus() || [];
+  const cpuModel = cpus[0]?.model ? cpus[0].model.replace(/\s+/g, ' ').trim() : `Processador (${osArch})`;
+  const cpuCores = cpus.length;
+  const loadAvg = os.loadavg ? os.loadavg().map(l => l.toFixed(2)).join(', ') : 'N/A';
+
+  // 4. Hardware - RAM
+  const totalMem = os.totalmem();
+  const freeMem = os.freemem();
+  const usedMem = totalMem - freeMem;
+  const ramUsagePercent = Math.round((usedMem / totalMem) * 100);
+
+  const formatMem = (bytes) => {
+    if (bytes >= 1024 * 1024 * 1024) {
+      return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+    }
+    return (bytes / (1024 * 1024)).toFixed(0) + ' MB';
+  };
+
+  const processMemMB = (process.memoryUsage().rss / (1024 * 1024)).toFixed(1);
+
+  // 5. Bateria
+  let batteryInfo = '🔌 Rede Elétrica / VPS (Sem bateria)';
+  try {
+    const adbPaths = [
+      '/data/data/com.termux/files/usr/bin/adb',
+      'adb'
+    ];
+    let out = '';
+    for (const p of adbPaths) {
+      try {
+        out = execSync(`${p} -s 127.0.0.1:5555 shell dumpsys battery 2>/dev/null || ${p} shell dumpsys battery 2>/dev/null`, { timeout: 1200 }).toString();
+        if (out && out.includes('level:')) break;
+      } catch (e) {}
+    }
+    if (out && out.includes('level:')) {
+      const levelMatch = out.match(/level:\s*(\d+)/i);
+      const acMatch = out.match(/AC powered:\s*(true|false)/i);
+      const usbMatch = out.match(/USB powered:\s*(true|false)/i);
+      const wirelessMatch = out.match(/Wireless powered:\s*(true|false)/i);
+      if (levelMatch) {
+        const level = levelMatch[1];
+        const isCharging = (acMatch && acMatch[1] === 'true') || (usbMatch && usbMatch[1] === 'true') || (wirelessMatch && wirelessMatch[1] === 'true');
+        batteryInfo = `${level}% ${isCharging ? '⚡ (Carregando)' : '🔋 (Na bateria)'}`;
+      }
+    } else if (fs.existsSync('/sys/class/power_supply/battery/capacity')) {
+      const cap = fs.readFileSync('/sys/class/power_supply/battery/capacity', 'utf8').trim();
+      batteryInfo = `${cap}% 🔋`;
+    }
+  } catch (e) {}
+
+  // 6. Uptime
+  const formatSec = (sec) => {
+    const d = Math.floor(sec / 86400);
+    const h = Math.floor((sec % 86400) / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = Math.floor(sec % 60);
+    const parts = [];
+    if (d > 0) parts.push(`${d}d`);
+    if (h > 0 || d > 0) parts.push(`${h}h`);
+    parts.push(`${m}m`);
+    parts.push(`${s}s`);
+    return parts.join(' ');
+  };
+
+  const sysUptime = formatSec(os.uptime());
+  const botUptime = formatSec(process.uptime());
+
+  return `🌐 *HOSPEDAGEM & AMBIENTE*
+• *Hospedado em:* ${hostDesc}
+• *Sistema Operacional:* ${osName} (${osArch})
+• *Node.js:* ${process.version} (PID: ${process.pid})
+• *Uptime do Servidor:* ${sysUptime}
+• *Uptime do Bot:* ${botUptime}
+
+💻 *HARDWARE & RECURSOS*
+• *CPU:* ${cpuModel} (${cpuCores} núcleos)
+• *Carga CPU (Load):* ${loadAvg}
+• *Consumo de RAM:* ${formatMem(usedMem)} / ${formatMem(totalMem)} (${ramUsagePercent}% em uso | ${formatMem(freeMem)} livre)
+• *RAM Usada pelo Bot:* ${processMemMB} MB
+• *Bateria:* ${batteryInfo}`;
+}
 
 export function registerStatusCommand(dispatcher, options = {}) {
   const { isFullBot = false } = options;
@@ -14,6 +122,12 @@ export function registerStatusCommand(dispatcher, options = {}) {
     name: 'status',
     aliases: [
       'st',
+      'statis',
+      'sistema',
+      'hardware',
+      'host',
+      'server',
+      'painel',
       'statuslista',
       'statislista',
       'stlista',
@@ -253,7 +367,8 @@ export function registerStatusCommand(dispatcher, options = {}) {
         return ctx.reply(`💡 Use: \`${prefix}status limpar ignorados\` ou \`${prefix}status limpar selecionados\``);
       }
 
-      // 9. PAINEL GERAL (Quando chamado sem argumentos: .status ou .st)
+      // 9. PAINEL GERAL (Quando chamado sem argumentos: .status ou .statis ou com subcomando de info/hardware/sistema)
+      const sysInfo = getSystemHardwareSoftwareInfo();
       const modoDesc = cfg.mode === 'both'
         ? `Ambos (Ver e Curtir) ✨ (${cfg.emoji || '❤️'})`
         : cfg.mode === 'like'
@@ -266,39 +381,33 @@ export function registerStatusCommand(dispatcher, options = {}) {
         ? 'Apenas Selecionados 🎯'
         : 'Todos os Contatos 👥';
 
-      const uptimeSeconds = Math.floor(process.uptime());
-      const h = Math.floor(uptimeSeconds / 3600);
-      const min = Math.floor((uptimeSeconds % 3600) / 60);
-      const s = uptimeSeconds % 60;
-      const ramMB = (process.memoryUsage().rss / (1024 * 1024)).toFixed(1);
-
       const presenceCount = Object.keys(store.typingChats || cfg.typingChats || {}).length;
       const ignoredCount = Array.isArray(cfg.statusIgnored) ? new Set(cfg.statusIgnored).size : 0;
       const selectedCount = Array.isArray(cfg.statusSelected) ? new Set(cfg.statusSelected).size : 0;
 
       let msg = `📊 *PAINEL DO BOT* 📊\n\n` +
-        `🤖 *Comandos:* ${cfg.commandsEnabled ? 'Ativados ✅' : 'Desativados 🛑'}\n` +
-        `👥 *Público:* ${cfg.allowPublicCommands ? 'Liberado ✅' : 'Restrito aos Donos 🔒'}\n` +
-        `⚙️ *Modo de Status:* ${modoDesc}\n` +
-        `🎯 *Alvo de Status:* ${targetDesc}\n` +
-        `⛔ *Bloqueados:* ${ignoredCount} contato(s)\n` +
-        `⭐ *Selecionados:* ${selectedCount} contato(s)\n` +
-        `👁️ *Status Vistos:* ${store.statusViewedCount || 0}\n` +
-        `👀 *Views Recebidas (Status):* ${store.statusViewsReceivedCount || 0}\n` +
-        `❤️ *Status Curtidos:* ${store.statusLikedCount || 0}\n` +
-        `⌨️ *Presença Fake:* ${presenceCount} chat(s) ativo(s)\n`;
+        `${sysInfo}\n\n` +
+        `⚙️ *CONFIGURAÇÕES & FUNÇÕES*\n` +
+        `• *Comandos:* ${cfg.commandsEnabled ? 'Ativados ✅' : 'Desativados 🛑'}\n` +
+        `• *Público:* ${cfg.allowPublicCommands ? 'Liberado ✅' : 'Restrito aos Donos 🔒'}\n` +
+        `• *Modo de Status:* ${modoDesc}\n` +
+        `• *Alvo de Status:* ${targetDesc}\n` +
+        `• *Bloqueados:* ${ignoredCount} contato(s)\n` +
+        `• *Selecionados:* ${selectedCount} contato(s)\n` +
+        `• *Status Vistos:* ${store.statusViewedCount || 0}\n` +
+        `• *Views Recebidas (Status):* ${store.statusViewsReceivedCount || 0}\n` +
+        `• *Status Curtidos:* ${store.statusLikedCount || 0}\n` +
+        `• *Presença Fake:* ${presenceCount} chat(s) ativo(s)\n`;
 
       if (isFullBot) {
-        msg += `✨ *Figurinhas Feitas:* ${store.stickersCreatedCount || 0}\n` +
-               `🎵 *Músicas Baixadas:* ${store.musicDownloadedCount || 0}\n` +
-               `📥 *Auto-Download:* ${cfg.autoDownload ? 'Ativado ✅' : 'Desativado ❌'}\n` +
-               `🗑️ *Auto-Apagar:* ${cfg.autoDeleteWord ? 'Ativado ✅' : 'Desativado ❌'}\n` +
-               `📺 *Notificação Anime:* ${cfg.autoAnimeNotify ? 'Ativado ✅' : 'Desativado ❌'}\n`;
+        msg += `• *Figurinhas Feitas:* ${store.stickersCreatedCount || 0}\n` +
+               `• *Músicas Baixadas:* ${store.musicDownloadedCount || 0}\n` +
+               `• *Auto-Download:* ${cfg.autoDownload ? 'Ativado ✅' : 'Desativado ❌'}\n` +
+               `• *Auto-Apagar:* ${cfg.autoDeleteWord ? 'Ativado ✅' : 'Desativado ❌'}\n` +
+               `• *Notificação Anime:* ${cfg.autoAnimeNotify ? 'Ativado ✅' : 'Desativado ❌'}\n`;
       }
 
-      msg += `💾 *RAM:* ${ramMB} MB\n` +
-             `⏱️ *Uptime:* ${h}h ${min}m ${s}s\n\n` +
-             `_Envie \`${prefix}status lista\` para ver e gerenciar os contatos._`;
+      msg += `\n_Envie \`${prefix}status lista\` para ver e gerenciar os contatos._`;
 
       await ctx.reply(msg.trim());
     }
