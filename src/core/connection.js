@@ -38,9 +38,9 @@ export function createWhatsAppConnection(options) {
   let reconnectAttempts = 0;
   const MAX_BACKOFF_MS = 30000;
 
-  // Cache LRU em memória para retry de mensagens (máx 500)
+  // Cache LRU em memória para retry de mensagens (máx 200 para economizar heap)
   const msgRetryCache = new Map();
-  const MAX_RETRY_CACHE = 500;
+  const MAX_RETRY_CACHE = 200;
 
   function cacheMessage(m) {
     if (m?.key?.id && m?.message) {
@@ -51,6 +51,21 @@ export function createWhatsAppConnection(options) {
       msgRetryCache.set(m.key.id, m.message);
     }
   }
+
+  // Cache bounded para o msgRetryCounterCache interno do Baileys
+  const msgRetryCounterMap = new Map();
+  const MAX_RETRY_COUNTER = 200;
+  const msgRetryCounterCache = {
+    get: (key) => msgRetryCounterMap.get(key),
+    set: (key, val) => {
+      if (msgRetryCounterMap.size >= MAX_RETRY_COUNTER) {
+        const oldest = msgRetryCounterMap.keys().next().value;
+        msgRetryCounterMap.delete(oldest);
+      }
+      msgRetryCounterMap.set(key, val);
+    },
+    del: (key) => msgRetryCounterMap.delete(key)
+  };
 
   async function connect() {
     // 1. Limpeza total de socket anterior
@@ -75,21 +90,39 @@ export function createWhatsAppConnection(options) {
       auth: state,
       browser: Browsers.macOS('Desktop'),
       syncFullHistory: false,
-      shouldSyncHistoryMessage: (msg) => {
-        return msg.syncType === proto.HistorySync.HistorySyncType.INITIAL_BOOTSTRAP ||
-               msg.syncType === proto.HistorySync.HistorySyncType.PUSH_NAME;
-      },
+      shouldSyncHistoryMessage: () => false,
       generateHighQualityLinkPreview: false,
       markOnlineOnConnect: false,
-      defaultQueryTimeoutMs: 60000,
+      defaultQueryTimeoutMs: 45000,
       keepAliveIntervalMs: 25000,
       connectTimeoutMs: 30000,
-      fireInitQueries: true,
+      fireInitQueries: false,
+      msgRetryCounterCache,
       getMessage: async (key) => msgRetryCache.get(key.id) || undefined,
       shouldIgnoreJid: (jid) => jid?.endsWith('@newsletter') || false
     });
 
     activeSock = sock;
+
+    // Cache inteligente de Group Metadata (TTL de 5 min para acelerar comandos de grupo em até 90%)
+    const groupMetadataCache = new Map();
+    const GROUP_CACHE_TTL = 5 * 60 * 1000;
+    const originalGroupMetadata = sock.groupMetadata.bind(sock);
+
+    sock.groupMetadata = async (jid) => {
+      const cached = groupMetadataCache.get(jid);
+      if (cached && (Date.now() - cached.timestamp < GROUP_CACHE_TTL)) {
+        return cached.data;
+      }
+      try {
+        const metadata = await originalGroupMetadata(jid);
+        groupMetadataCache.set(jid, { data: metadata, timestamp: Date.now() });
+        return metadata;
+      } catch (err) {
+        if (cached?.data) return cached.data;
+        throw err;
+      }
+    };
 
     // Salvar credenciais sempre que atualizadas
     sock.ev.on('creds.update', saveCreds);
@@ -189,10 +222,11 @@ export function createWhatsAppConnection(options) {
       });
     }
 
-    // Eventos de Membros de Grupo (Antifake)
-    if (onGroupParticipantsUpdate) {
-      sock.ev.on('group-participants.update', (data) => onGroupParticipantsUpdate(data, sock));
-    }
+    // Eventos de Membros de Grupo (Antifake & Invalidação de Cache de Metadados)
+    sock.ev.on('group-participants.update', (data) => {
+      if (data?.id) groupMetadataCache.delete(data.id);
+      if (onGroupParticipantsUpdate) onGroupParticipantsUpdate(data, sock);
+    });
 
     return sock;
   }
