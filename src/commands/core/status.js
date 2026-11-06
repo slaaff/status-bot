@@ -385,7 +385,7 @@ export function registerStatusCommand(dispatcher, options = {}) {
         const mus = store.musicDownloadedCount || 0;
 
         msg += `🤖 *${botName} (!):* ${isPublic} | Cmds ${cmdsStatus}\n` +
-               `• *Funções (!):* DL ${dlStatus} | Del ${delStatus} | Anime ${animeStatus} | Fake: ${presenceCount} | ${figs} fig | ${mus} mús\n`;
+               `• *Funções (!):* DL ${dlStatus} | Del ${delStatus} | Anime ${animeStatus} | Fake: ${presenceCount} | ${figs} fig | ${mus} mús`;
       } else {
         const botName = cfg.botName || 'Status Bot Pessoal';
         const modoDesc = cfg.mode === 'both'
@@ -401,10 +401,9 @@ export function registerStatusCommand(dispatcher, options = {}) {
         const views = store.statusViewsReceivedCount || 0;
 
         msg += `👁️ *${botName} (.):* ${modoDesc} | ${targetDesc} (${ignoredCount} bloq | ${selectedCount} sel)\n` +
-               `• *Stats (.):* ${likes} ❤️ | ${vistos} 👀 | ${views} views\n`;
+               `• *Stats (.):* ${likes} ❤️ | ${vistos} 👀 | ${views} views\n` +
+               `_Envie \`${prefix}status lista\` para gerenciar os contatos._`;
       }
-
-      msg += `_Envie \`${prefix}status lista\` para gerenciar os contatos._`;
 
       await ctx.reply(msg.trim());
     }
