@@ -180,7 +180,9 @@ export function createWhatsAppConnection(options) {
     if (onMessage) {
       sock.ev.on('messages.upsert', ({ messages }) => {
         if (!messages || messages.length === 0) return;
+        const now = Date.now();
         for (const m of messages) {
+          m.receivedAt = now;
           cacheMessage(m);
         }
         onMessage(messages, sock);

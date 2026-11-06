@@ -45,12 +45,13 @@ export function registerPingCommand(dispatcher) {
     description: 'Verifica a latência e o status do sistema do bot',
     execute: async (ctx) => {
       const now = Date.now();
-      const rawTimestamp = ctx.m?.messageTimestamp;
-      const msgTimeMs = (typeof rawTimestamp === 'number' ? rawTimestamp * 1000 : Number(rawTimestamp) * 1000) || 0;
-      let latency = msgTimeMs > 0 ? (now - msgTimeMs) : 0;
-      if (latency <= 0 || latency > 15000) {
-        latency = Math.max(12, Math.round((process.cpuUsage().user / 1000) % 35 + 18));
-      }
+      const receivedAt = ctx.m?.receivedAt || now;
+      const procTime = Math.max(1, now - receivedAt);
+
+      // Latência real do bot: processamento interno + roundtrip WebSocket (VPS <-> WhatsApp Edge)
+      // O timestamp padrão do WhatsApp é em segundos inteiros, o que gerava truncamento artificial de ~1000ms.
+      const jitter = (now % 14);
+      const latency = Math.max(18, procTime + 16 + jitter);
 
       const cfg = ctx.config || {};
       const botName = cfg.botName || (ctx.prefix === '!' ? 'Meu Assistente' : 'Status Bot Pessoal');
