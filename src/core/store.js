@@ -1,13 +1,15 @@
 /**
  * Gerenciador de Armazenamento e Estatísticas Persistentes
  * - Centraliza contadores de status vistos/curtidos, estatísticas, grupos e presença fake
- * - Suporta compatibilidade retroativa com stats.json e data/storage.json
+ * - Limita statusViews aos últimos 200 registros para evitar crescimento infinito em disco/RAM
  * - Gravação debounced com flush garantido no encerramento do processo
  */
 
 import fs from 'fs';
 import path from 'path';
 import { logger } from './logger.js';
+
+const MAX_STORED_STATUS_VIEWS = 200;
 
 export function createStoreManager(customStoragePath = './data/storage.json', legacyStatsPath = './stats.json') {
   const primaryPath = path.resolve(customStoragePath);
@@ -31,10 +33,23 @@ export function createStoreManager(customStoragePath = './data/storage.json', le
   let saveTimer = null;
   let isDirty = false;
 
+  function pruneStatusViews() {
+    if (!storeData.statusViews || typeof storeData.statusViews !== 'object') {
+      storeData.statusViews = {};
+      return false;
+    }
+    const keys = Object.keys(storeData.statusViews);
+    if (keys.length <= MAX_STORED_STATUS_VIEWS) return false;
+    const removeCount = keys.length - MAX_STORED_STATUS_VIEWS;
+    for (let i = 0; i < removeCount; i++) {
+      delete storeData.statusViews[keys[i]];
+    }
+    return true;
+  }
+
   function load() {
     let loaded = false;
 
-    // 1. Tenta carregar do arquivo principal (data/storage.json)
     if (fs.existsSync(primaryPath)) {
       try {
         const parsed = JSON.parse(fs.readFileSync(primaryPath, 'utf8'));
@@ -45,7 +60,6 @@ export function createStoreManager(customStoragePath = './data/storage.json', le
       }
     }
 
-    // 2. Se não carregou do principal ou se legacyStatsPath existe (status-bot), mescla stats.json
     if (legacyPath && fs.existsSync(legacyPath)) {
       try {
         const legacy = JSON.parse(fs.readFileSync(legacyPath, 'utf8'));
@@ -56,11 +70,14 @@ export function createStoreManager(customStoragePath = './data/storage.json', le
       } catch {}
     }
 
-    if (!storeData.statusViews) storeData.statusViews = {};
     if (!storeData.typingChats) storeData.typingChats = {};
     if (!storeData.antilinkGroups) storeData.antilinkGroups = {};
     if (!storeData.antifakeGroups) storeData.antifakeGroups = {};
     if (!Array.isArray(storeData.ownerChatJids)) storeData.ownerChatJids = [];
+
+    if (pruneStatusViews()) {
+      isDirty = true;
+    }
 
     return storeData;
   }
@@ -76,7 +93,6 @@ export function createStoreManager(customStoragePath = './data/storage.json', le
       fs.mkdirSync(path.dirname(primaryPath), { recursive: true });
       fs.writeFileSync(primaryPath, JSON.stringify(storeData, null, 2), 'utf8');
 
-      // Se legacyPath foi fornecido, mantém espelhado para retrocompatibilidade
       if (legacyPath) {
         const legacyObj = {
           viewed: storeData.statusViewedCount || 0,
@@ -107,9 +123,7 @@ export function createStoreManager(customStoragePath = './data/storage.json', le
     }
   }
 
-  process.on('exit', flush);
-  process.on('SIGINT', () => { flush(); process.exit(0); });
-  process.on('SIGTERM', () => { flush(); process.exit(0); });
+  process.once('exit', flush);
 
   load();
 
@@ -119,7 +133,6 @@ export function createStoreManager(customStoragePath = './data/storage.json', le
     flush,
     reload: load,
 
-    // Helpers diretos
     incrementViewed: () => {
       storeData.statusViewedCount = (storeData.statusViewedCount || 0) + 1;
       save();
@@ -137,6 +150,7 @@ export function createStoreManager(customStoragePath = './data/storage.json', le
       if (!storeData.statusViews[statusId].includes(viewerJid)) {
         storeData.statusViews[statusId].push(viewerJid);
         storeData.statusViewsReceivedCount = (storeData.statusViewsReceivedCount || 0) + 1;
+        pruneStatusViews();
         save();
         return true;
       }

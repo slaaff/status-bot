@@ -96,7 +96,7 @@ export function createStatusHandler(options) {
       };
       const sender = senderPhone || participant.split('@')[0] || 'Contato';
 
-      // 1. Marcar como Visto (apenas se shouldView for verdadeiro)
+      // 1. Marcar como Visto (apenas se configurado)
       if (shouldView) {
         await sock.readMessages([statusKey]);
         const count = storeManager.incrementViewed();

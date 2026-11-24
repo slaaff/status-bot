@@ -67,6 +67,7 @@ export function createPresenceHandler(options) {
       clearInterval(presenceInterval);
       presenceInterval = null;
     }
+    activeSock = null;
   }
 
   async function pausePresence(jid) {

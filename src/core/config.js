@@ -16,19 +16,18 @@ export function createConfigManager(customConfigPath = './config.json', botDefau
   const filePath = path.resolve(customConfigPath);
 
   const baseDefaults = {
-    botName: 'Status Bot Pessoal',
-    prefix: '.',
-    phoneNumber: '5574998000519',
+    botName: 'WhatsApp Bot',
+    prefix: '!',
     ownerPhone: '5574998000519',
     ownerPhones: ['5574998000519', '5583921490880'],
     ownerLids: ['49396418875542', '242107960811698'],
     commandsEnabled: true,
     allowPublicCommands: false, // Inicia desativado pro público por padrão
     mode: 'like', // 'view' | 'like' | 'both' | 'off'
-    emoji: '💚',
+    emoji: '❤️',
     autoViewStatus: false,
     autoLikeStatus: true,
-    autoLikeEmoji: '💚',
+    autoLikeEmoji: '❤️',
     autoDownload: false,
     autoDeleteWord: false,
     autoAnimeNotify: false,
@@ -310,9 +309,7 @@ export function createConfigManager(customConfigPath = './config.json', botDefau
     return false;
   }
 
-  process.on('exit', flush);
-  process.on('SIGINT', () => { flush(); process.exit(0); });
-  process.on('SIGTERM', () => { flush(); process.exit(0); });
+  process.once('exit', flush);
 
   load();
 

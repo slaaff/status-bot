@@ -1,11 +1,11 @@
 /**
- * WhatsApp Status Bot (Dedicado, Ultraleve & Otimizado)
+ * WhatsApp Status Bot (Dedicado, Ultraleve & Padronizado)
  *
- * Funcionalidades:
+ * Funcionalidades (sem extras):
  * - Visualizador e Curtidor Automático de Status (Stories) com preservação de círculo verde
  * - Presença fake contínua (Digitando, Gravando áudio, Online)
- * - Rastreamento em tempo real de visualizações recebidas nos status da própria conta
- * - Arquitetura unificada e modular
+ * - Comandos de Status, Grupos e Figurinhas exclusivamente no prefixo ';'
+ * - Núcleo 100% padronizado com o whatsapp-bot e controle estrito de memória
  */
 
 import { logger } from './src/core/logger.js';
@@ -14,6 +14,7 @@ import { createStoreManager } from './src/core/store.js';
 import { createMessageStore } from './src/core/messageStore.js';
 import { createDispatcher } from './src/core/dispatcher.js';
 import { createWhatsAppConnection } from './src/core/connection.js';
+import { setupRuntimeGuards } from './src/core/runtime.js';
 import { createStatusHandler } from './src/handlers/statusHandler.js';
 import { createPresenceHandler } from './src/handlers/presenceHandler.js';
 import { registerCoreCommands } from './src/commands/core/index.js';
@@ -24,33 +25,47 @@ import { registerStickerCommands } from './src/commands/media/stickers.js';
 async function main() {
   const configManager = createConfigManager('./config.json', {
     botName: 'Status Bot Pessoal',
-    prefix: '.',
+    prefix: ';',
     mode: 'like',
     emoji: '💚'
   });
 
   const storeManager = createStoreManager('./data/storage.json', './stats.json');
   const messageStore = createMessageStore({
-    maxMessages: 2500
+    maxMessages: 150,
+    maxAgeMs: 20 * 60 * 1000
   });
 
   const config = configManager.get();
+  if (config.prefix !== ';') {
+    configManager.save({ prefix: ';' });
+  }
+
   logger.banner(config.botName, [
-    `Prefixo Ativo: ${config.prefix}`,
+    'Prefixo Estrito: ; (ignora ! e .)',
     `Donos: ${configManager.getOwnerPhones().join(', ') || 'Nenhum'}`,
     `Modo Inicial: ${(config.mode || 'like').toUpperCase()} (Emoji: ${config.emoji || '💚'})`,
     'Inicializando gerenciadores e listeners...'
   ]);
 
-  const dispatcher = createDispatcher({ configManager, storeManager, messageStore });
+  const dispatcher = createDispatcher({
+    configManager,
+    storeManager,
+    messageStore,
+    prefix: ';',
+    ignoredPrefixes: ['!', '.']
+  });
+
   const statusHandler = createStatusHandler({ configManager, storeManager });
   const presenceHandler = createPresenceHandler({ configManager, storeManager });
 
-  // Registrar comandos do Status Bot
+  // Registrar apenas os módulos do Status Bot (sem funções extras)
   registerCoreCommands(dispatcher, { presenceHandler, isFullBot: false });
   registerGroupCommands(dispatcher);
   registerMenuCommand(dispatcher);
   registerStickerCommands(dispatcher);
+
+  let runtimeGuards = null;
 
   // Criar conexão unificada do WhatsApp
   const connection = createWhatsAppConnection({
@@ -58,8 +73,13 @@ async function main() {
     configManager,
     storeManager,
     messageStore,
+    authCacheSize: 600,
+    retryCacheSize: 40,
+    retryCounterSize: 80,
+    groupCacheSize: 100,
 
     onOpen: (sock) => {
+      runtimeGuards?.markConnected();
       presenceHandler.start(sock);
     },
 
@@ -91,16 +111,17 @@ async function main() {
     }
   });
 
-  // Coletor periódico de memória a cada 30 minutos para evitar vazamentos e OOM
-  setInterval(() => {
-    if (global.gc) {
-      try {
-        global.gc();
-      } catch {}
-    }
-  }, 30 * 60 * 1000);
+  runtimeGuards = setupRuntimeGuards({
+    botName: 'status-bot',
+    logger,
+    configManager,
+    storeManager,
+    presenceHandler,
+    connection,
+    messageStore,
+    gcIntervalMs: 5 * 60 * 1000
+  });
 
-  // Iniciar conexão
   await connection.connect();
 }
 

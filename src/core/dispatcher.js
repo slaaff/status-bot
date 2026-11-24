@@ -1,19 +1,24 @@
 /**
  * Despachante Central de Mensagens e Comandos
  * - Roteamento ultra-rápido de comandos via Map O(1)
- * - Validação estrita de prefixo obrigatório: SOMENTE '.' é aceito no status-bot
- * - Mensagens com '!' são sumariamente ignoradas (reservadas para o whatsapp-bot)
- * - Suporte a comandos colados/juntos com '.' (ex: .statuslista, .statislista, .statustodos, .statusdesativar)
- * - Trava mestre de comandos (.bot on/off)
- * - Trava de acesso público (.publico on/off): quando público estiver off, responde exclusivamente aos donos
- * - Reconhecimento e aprendizado dinâmico de identificadores dos dois donos (LID e telefone)
- * - Hooks passivos modulares (anti-link, downloads automáticos, anti-viewonce)
+ * - Validação estrita de prefixo configurado (ex: '!' no whatsapp-bot, ';' no status-bot)
+ * - Ignora sumariamente mensagens iniciadas pelos prefixos reservados do outro bot
+ * - Suporte a comandos colados de status (ex: statuslista, statustodos)
+ * - Trava mestre de comandos (bot on/off) e acesso público (publico on/off)
+ * - Reconhecimento e aprendizado dinâmico de identificadores dos donos (LID e telefone)
+ * - Hooks passivos modulares
  */
 
 import { logger } from './logger.js';
 
 export function createDispatcher(options) {
-  const { configManager, storeManager, messageStore } = options;
+  const {
+    configManager,
+    storeManager,
+    messageStore,
+    prefix: forcedPrefix = null,
+    ignoredPrefixes = []
+  } = options;
 
   const commands = new Map();
   const aliases = new Map();
@@ -21,7 +26,7 @@ export function createDispatcher(options) {
 
   function registerCommand(cmdDef) {
     if (!cmdDef.name || typeof cmdDef.execute !== 'function') {
-      throw new Error(`Comando inválido: nome e método execute são obrigatórios`);
+      throw new Error('Comando inválido: nome e método execute são obrigatórios');
     }
 
     const name = cmdDef.name.toLowerCase();
@@ -72,13 +77,15 @@ export function createDispatcher(options) {
     const fullText = extractMessageText(m);
     const config = configManager.get();
 
-    // REGRA ESTRITA: Se a mensagem começar com '!', IGNORA COMPLETAMENTE (reservado para o whatsapp-bot)
-    if (fullText.startsWith('!')) {
-      return;
+    const strictPrefix = forcedPrefix || config.prefix || '!';
+
+    // Regra estrita: ignora mensagens iniciadas por prefixos reservados ao outro bot
+    for (const ignored of ignoredPrefixes) {
+      if (ignored && ignored !== strictPrefix && fullText.startsWith(ignored)) {
+        return;
+      }
     }
 
-    // 1. Prefixo Estrito Obrigatório: SOMENTE '.' é aceito no status-bot
-    const strictPrefix = '.';
     const isCommand = Boolean(fullText.startsWith(strictPrefix));
 
     const isGroup = remoteJid.endsWith('@g.us');
@@ -112,7 +119,7 @@ export function createDispatcher(options) {
       }
     }
 
-    // Contexto enriquecido para os handlers
+    // Contexto enriquecido para os handlers e comandos
     const ctx = {
       sock,
       m,
@@ -123,6 +130,7 @@ export function createDispatcher(options) {
       senderNum: sender.split('@')[0].split(':')[0].replace(/\D/g, ''),
       isFromOwner,
       fullText,
+      prefix: strictPrefix,
       config,
       store,
       configManager,
@@ -138,7 +146,7 @@ export function createDispatcher(options) {
       }
     };
 
-    // 2. Se NÃO for comando com prefixo '.', avalia hooks passivos
+    // Se NÃO for comando com o prefixo do bot, avalia hooks passivos
     if (!isCommand) {
       if (config.commandsEnabled === false && !isFromOwner) return;
 
@@ -167,8 +175,7 @@ export function createDispatcher(options) {
       return;
     }
 
-    // 3. Processamento Estrito do Comando (Requer prefixo '.' obrigatoriamente)
-    if (!fullText.startsWith(strictPrefix)) return;
+    // Processamento Estrito do Comando
     const cleanText = fullText.slice(strictPrefix.length).trim();
     if (!cleanText) return;
 
@@ -177,7 +184,7 @@ export function createDispatcher(options) {
     const argText = spaceIndex === -1 ? '' : cleanText.slice(spaceIndex + 1).trim();
     let args = argText ? argText.split(/\s+/) : [];
 
-    // Suporte especial a comandos colados/juntos (ex: statuslista, statislista, statustodos, statusdesativar, stlista)
+    // Suporte a comandos colados/juntos de status (ex: statuslista, statislista, stlista)
     const statusJoinedMatch = commandName.match(/^(?:status|statis|st)(lista|todos|selecionados|desativar|bloquear|ativar|liberar|add|del|remover|limpar|off|on)$/i);
     if (statusJoinedMatch && !commands.has(commandName)) {
       const sub = statusJoinedMatch[1].toLowerCase();
@@ -188,7 +195,6 @@ export function createDispatcher(options) {
     let resolvedName = aliases.get(commandName) || commandName;
     let cmdDef = commands.get(resolvedName);
 
-    // Se o comando não foi encontrado diretamente, tenta resolver subcomandos de status
     if (!cmdDef && (commandName.startsWith('status') || commandName.startsWith('statis'))) {
       const remainder = commandName.replace(/^(?:status|statis)/i, '');
       if (remainder) {
@@ -200,7 +206,7 @@ export function createDispatcher(options) {
 
     if (!cmdDef) return;
 
-    // 4. Trava Mestre: Comandos Ativados/Desativados
+    // Trava Mestre: Comandos Ativados/Desativados
     const isExemptCmd = [
       'bot', 'ativar', 'desativar', 'desligar', 'comandos', 'publico',
       'status', 'st', 'statuslista', 'menu', 'ajuda', 'ping'
@@ -215,7 +221,7 @@ export function createDispatcher(options) {
       return;
     }
 
-    // 5. Trava do Público: Se público estiver OFF, responde SOMENTE aos donos
+    // Trava do Público: Se público estiver OFF, responde SOMENTE aos donos
     if (!isFromOwner) {
       if (!config.allowPublicCommands) {
         logger.info('DISPATCHER', `Comando ${strictPrefix}${commandName} ignorado (Público OFF e remetente não é dono: +${ctx.senderNum})`);
@@ -226,7 +232,7 @@ export function createDispatcher(options) {
       }
     }
 
-    // 6. Validação de Escopo (Grupo vs Privado)
+    // Validação de Escopo (Grupo vs Privado)
     if (cmdDef.groupOnly && !isGroup) {
       await ctx.reply('⚠️ Este comando só pode ser utilizado em grupos.');
       return;
@@ -237,7 +243,6 @@ export function createDispatcher(options) {
       return;
     }
 
-    ctx.prefix = strictPrefix;
     ctx.command = commandName;
     ctx.canonicalCommand = resolvedName;
     ctx.args = args;

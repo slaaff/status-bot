@@ -1,6 +1,6 @@
 /**
  * Comando de Menu Completo e Padronizado para o Status Bot
- * .menu, .ajuda
+ * ;menu, ;ajuda
  */
 
 export function registerMenuCommand(dispatcher) {

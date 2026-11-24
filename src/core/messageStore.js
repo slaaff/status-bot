@@ -1,6 +1,6 @@
 /**
  * Gerenciador de Armazenamento e Cache de Mensagens
- * - Cache LRU em memória para mensagens recentes (permite retentativa e resolução de mídia)
+ * - Cache LRU com expiração automática por idade para evitar consumo excessivo de RAM
  * - Deserialização e restauração segura de Buffers criptográficos
  */
 
@@ -16,36 +16,58 @@ export function restoreBuffers(obj) {
 }
 
 export function createMessageStore(options = {}) {
-  const { maxMessages = 2500 } = options;
+  const { maxMessages = 600, maxAgeMs = 30 * 60 * 1000 } = options;
   const msgCache = new Map();
+
+  function prune(now = Date.now()) {
+    for (const [id, item] of msgCache) {
+      if (now - item.receivedAt > maxAgeMs) {
+        msgCache.delete(id);
+      } else {
+        break;
+      }
+    }
+  }
 
   function cacheMessage(m) {
     if (!m?.key?.id || !m?.message) return;
     const id = m.key.id;
+    const now = m.receivedAt || Date.now();
 
-    if (msgCache.size >= maxMessages) {
-      const oldest = msgCache.keys().next().value;
-      msgCache.delete(oldest);
+    if (msgCache.has(id)) {
+      msgCache.delete(id);
+    } else if (msgCache.size >= maxMessages) {
+      prune(now);
+      if (msgCache.size >= maxMessages) {
+        const oldest = msgCache.keys().next().value;
+        msgCache.delete(oldest);
+      }
     }
 
     msgCache.set(id, {
       id,
       key: m.key,
       message: m.message,
-      receivedAt: m.receivedAt || Date.now()
+      receivedAt: now
     });
   }
 
   function getMessage(id) {
     if (!id) return null;
     const item = msgCache.get(id) || null;
-    if (item) restoreBuffers(item);
+    if (!item) return null;
+    if (Date.now() - item.receivedAt > maxAgeMs) {
+      msgCache.delete(id);
+      return null;
+    }
+    restoreBuffers(item);
     return item;
   }
 
   return {
     cacheMessage,
     getMessage,
+    prune,
     restoreBuffers,
     getGeneralCacheSize: () => msgCache.size
   };
