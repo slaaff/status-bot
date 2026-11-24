@@ -2,6 +2,7 @@ module.exports = {
   apps: [
     {
       name: 'status-bot',
+      cwd: __dirname,
       script: 'index.js',
       exec_mode: 'fork',
       instances: 1,
