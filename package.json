@@ -9,7 +9,9 @@
     "pair": "node pair.js"
   },
   "dependencies": {
+    "@gradio/client": "^2.7.2",
     "@whiskeysockets/baileys": "^7.0.0-rc14",
+    "node-webpmux": "^3.2.1",
     "pino": "^10.4.0",
     "qrcode-terminal": "^0.12.0"
   }

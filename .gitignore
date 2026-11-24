@@ -11,3 +11,4 @@ stats.json
 .yarnrc.yml
 stats.json
 data/
+session_*/

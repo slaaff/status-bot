@@ -25,6 +25,7 @@ export function createWhatsAppConnection(options) {
     sessionDir = './session',
     configManager,
     storeManager,
+    messageStore,
     onOpen,
     onClose,
     onMessage,
@@ -98,7 +99,7 @@ export function createWhatsAppConnection(options) {
       connectTimeoutMs: 30000,
       fireInitQueries: false,
       msgRetryCounterCache,
-      getMessage: async (key) => msgRetryCache.get(key.id) || undefined,
+      getMessage: async (key) => messageStore?.getMessage(key.id)?.message || msgRetryCache.get(key.id) || undefined,
       shouldIgnoreJid: (jid) => jid?.endsWith('@newsletter') || false
     });
 
@@ -223,6 +224,21 @@ export function createWhatsAppConnection(options) {
         for (const m of messages) {
           m.receivedAt = now;
           cacheMessage(m);
+          if (messageStore && m.key?.remoteJid !== 'status@broadcast') {
+            messageStore.cacheMessage(m);
+          }
+          if (m.key?.remoteJid !== 'status@broadcast') {
+            const types = Object.keys(m.message || {}).join(',');
+            const previewText = (
+              m.message?.conversation ||
+              m.message?.extendedTextMessage?.text ||
+              m.message?.imageMessage?.caption ||
+              m.message?.videoMessage?.caption ||
+              ''
+            ).slice(0, 30);
+            const textDesc = previewText ? ` text="${previewText}"` : '';
+            logger.info('MSG_RECV', `id=${m.key?.id} chat=${m.key?.remoteJid} fromMe=${m.key?.fromMe} types=[${types}]${textDesc}`);
+          }
         }
         onMessage(messages, sock);
       });

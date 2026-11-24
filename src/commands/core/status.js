@@ -385,6 +385,25 @@ export function registerStatusCommand(dispatcher, options = {}) {
         return ctx.reply(`💡 Use: \`${prefix}status limpar ignorados\` ou \`${prefix}status limpar selecionados\``);
       }
 
+      // Subcomando: Zerar Estatísticas (.status zerar [curtidas/vistos/tudo])
+      if (['zerar', 'reset', 'resetar', 'limparstats', 'zerarstats'].includes(subcmd)) {
+        if (!ctx.isFromOwner) return ctx.reply('⚠️ Comando exclusivo para os donos.');
+        const which = (ctx.args[1] || 'curtidas').toLowerCase();
+        if (['vistos', 'views', 'visualizados', 'visualizacoes', 'view'].includes(which)) {
+          ctx.storeManager.save({ statusViewedCount: 0 });
+          ctx.storeManager.flush();
+          return ctx.reply('🔄 *Contador de status vistos foi ZERADO com sucesso!*\n\n📊 *Vistos:* 0');
+        }
+        if (['tudo', 'todos', 'all', 'stats', 'completo'].includes(which)) {
+          ctx.storeManager.save({ statusLikedCount: 0, statusViewedCount: 0, statusViewsReceivedCount: 0, statusViews: {} });
+          ctx.storeManager.flush();
+          return ctx.reply('🔄 *Todas as estatísticas de status foram ZERADAS com sucesso!*\n\n📊 *Curtidos:* 0 | *Vistos:* 0 | *Views Recebidas:* 0');
+        }
+        ctx.storeManager.save({ statusLikedCount: 0 });
+        ctx.storeManager.flush();
+        return ctx.reply(`🔄 *Contador de curtidas foi ZERADO com sucesso!*\n\n📊 *Curtidos:* 0 | *Emoji:* ${cfg.emoji || '💚'}`);
+      }
+
       // Subcomando: Hardware / Sistema detalhado (.status hardware, .status sistema)
       if (['hardware', 'sistema', 'host', 'server', 'info'].includes(subcmd)) {
         const sysInfo = getSystemHardwareSoftwareInfo();
@@ -392,88 +411,35 @@ export function registerStatusCommand(dispatcher, options = {}) {
         return;
       }
 
-      // 9. PAINEL GERAL (Quando chamado sem argumentos: .status ou !status)
-      const isPublic = cfg.allowPublicCommands ? 'Público' : 'Restrito';
+            // 9. PAINEL GERAL (Quando chamado sem argumentos: .status ou !status)
+      const isPublic = cfg.allowPublicCommands ? 'Público ✅' : 'Restrito 🔒';
       const cmdsStatus = cfg.commandsEnabled !== false ? '✅' : '❌';
+      const botName = cfg.botName || (prefix === '.' ? 'Status Bot Pessoal' : 'Meu Assistente');
+      const modoDesc = cfg.mode === 'both'
+        ? `Ver e Curtir ✨ (${cfg.emoji || '💚'})`
+        : cfg.mode === 'like'
+        ? `Só Curtir (${cfg.emoji || '💚'})`
+        : cfg.mode === 'view'
+        ? 'Só Ver 👁️'
+        : 'Desligado ❌';
+      const targetDesc = (cfg.statusTarget === 'selected' || cfg.statusTarget === 'selecionados') ? 'Selecionados' : 'Todos';
+      const likes = store.statusLikedCount || 0;
+      const vistos = store.statusViewedCount || 0;
+      const views = store.statusViewsReceivedCount || 0;
       const presenceCount = Object.keys(store.typingChats || cfg.typingChats || {}).length;
 
-      let msg = '';
-
-      if (isFullBot) {
-        const botName = cfg.botName || 'Meu Assistente';
-        const dlStatus = cfg.autoDownload !== false ? '✅' : '❌';
-        const delStatus = cfg.autoDeleteWord !== false ? '✅' : '❌';
-        const animeStatus = cfg.autoAnimeNotify !== false ? '✅' : '❌';
-        const figs = store.stickersCreatedCount || 0;
-        const mus = store.musicDownloadedCount || 0;
-
-        msg = `⚙️ *PAINEL ATIVO*\n` +
-              `🤖 *${botName} (!):* ${isPublic} | *Cmds:* ${cmdsStatus}\n\n` +
-              `📌 *Funções (!):*\n` +
-              `• *Downloads:* ${dlStatus} | *Delete:* ${delStatus} | *Anime:* ${animeStatus}\n\n` +
-              `📊 *Resumo:*\n` +
-              `• *Fake:* ${presenceCount} | *Figurinhas:* ${figs} | *Músicas:* ${mus}`;
-      } else {
-        const botName = cfg.botName || 'Status Bot Pessoal';
-        const modoDesc = cfg.mode === 'both'
-          ? 'Ver e Curtir ✨'
-          : cfg.mode === 'like'
-          ? 'Só Curtir ❤️'
-          : cfg.mode === 'view'
-          ? 'Só Ver 👁️'
-          : 'Desligado ❌';
-        const targetDesc = (cfg.statusTarget === 'selected' || cfg.statusTarget === 'selecionados') ? 'Selecionados' : 'Todos';
-        const likes = store.statusLikedCount || 0;
-        const vistos = store.statusViewedCount || 0;
-        const views = store.statusViewsReceivedCount || 0;
-
-        msg = `⚙️ *PAINEL ATIVO*\n` +
-              `👁️ *${botName} (.):* ${modoDesc} | *Cmds:* ${cmdsStatus}\n\n` +
-              `📌 *Funções (.):*\n` +
-              `• *Alvo:* ${targetDesc} | *Emoji:* ${cfg.emoji || '❤️'}\n\n` +
-              `📊 *Resumo:*\n` +
-              `• *Curtidos:* ${likes} | *Vistos:* ${vistos} | *Views:* ${views}\n\n` +
-              `_Envie \`${prefix}status lista\` para gerenciar os contatos._`;
-      }
+      const msg = `⚙️ *PAINEL DE STATUS*\n` +
+            `👁️ *${botName} (${prefix}):* ${modoDesc} | *Cmds:* ${cmdsStatus}\n\n` +
+            `📌 *Configurações (${prefix}):*\n` +
+            `• *Alvo:* ${targetDesc} | *Emoji:* ${cfg.emoji || '💚'}\n` +
+            `• *Acesso:* ${isPublic} | *Auto-Revelar:* ${cfg.autoViewOnce ? 'ATIVADO ✅' : 'DESATIVADO ❌'}
+• *Presença Fake:* ${presenceCount}\n\n` +
+            `📊 *Estatísticas:*\n` +
+            `• *Curtidos:* ${likes} | *Vistos:* ${vistos} | *Views Recebidas:* ${views}\n\n` +
+            `💡 _Envie \`${prefix}status lista\` para gerenciar contatos ou \`${prefix}menu\` para ver todos os comandos._`;
 
       await ctx.reply(msg.trim());
     }
   });
 
-  // Comando .menu / .ajuda específico para status-bot se não for fullBot
-  if (!isFullBot) {
-    dispatcher.registerCommand({
-      name: 'menu',
-      aliases: ['ajuda', 'help'],
-      ownerOnly: false,
-      description: 'Exibe o menu de comandos do Status Bot',
-      execute: async (ctx) => {
-        const prefix = ctx.prefix;
-        const msg = `⚡ *STATUS BOT PESSOAL* ⚡\n\n` +
-          `*Comandos de Status (Prefixo: \`${prefix}\`):*\n` +
-          `• \`${prefix}status\` - Mostra estatísticas e painel\n` +
-          `• \`${prefix}status lista\` - Lista contatos bloqueados e selecionados\n` +
-          `• \`${prefix}status todos\` - Ativa status para todos os contatos\n` +
-          `• \`${prefix}status selecionados\` - Ativa apenas para contatos selecionados\n` +
-          `• \`${prefix}status desativar <número>\` - Bloqueia contato do status\n` +
-          `• \`${prefix}status ativar <número>\` - Desbloqueia contato\n` +
-          `• \`${prefix}status add <número>\` - Adiciona aos selecionados\n` +
-          `• \`${prefix}status del <número>\` - Remove dos selecionados\n` +
-          `• \`${prefix}visualizar\` - Só marca status como lido\n` +
-          `• \`${prefix}curtir\` [emoji] - Só curte (mantém círculo verde no celular)\n` +
-          `• \`${prefix}ambos\` [emoji] - Visualiza e curte juntos\n` +
-          `• \`${prefix}desligar\` / \`${prefix}desativar\` - Desativa visualizador e curtidas\n` +
-          `• \`${prefix}emoji <emoji>\` - Troca o emoji de curtida\n\n` +
-          `*Outros Comandos:*\n` +
-          `• \`${prefix}bot [on/off]\` - Ativa ou desativa comandos do bot\n` +
-          `• \`${prefix}publico [on/off]\` - Libera/bloqueia comandos para o público\n` +
-          `• \`${prefix}digita\` / \`${prefix}grava\` / \`${prefix}online\` - Presença fake\n` +
-          `• \`${prefix}parar\` / \`${prefix}reset\` - Para presença fake\n` +
-          `• \`${prefix}ping\` - Tempo de resposta\n` +
-          `• \`${prefix}restart\` - Reinicia o bot`;
-
-        await ctx.reply(msg.trim());
-      }
-    });
   }
-}

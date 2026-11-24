@@ -1,18 +1,19 @@
 /**
  * Despachante Central de Mensagens e Comandos
  * - Roteamento ultra-rápido de comandos via Map O(1)
- * - Validação estrita de prefixo obrigatório ('!' para whatsapp-bot, '.' para status-bot) - sem comandos sem prefixo
- * - Suporte a comandos colados/juntos com prefixo (ex: .statuslista, .statislista, .statustodos, .statusdesativar)
+ * - Validação estrita de prefixo obrigatório: SOMENTE '.' é aceito no status-bot
+ * - Mensagens com '!' são sumariamente ignoradas (reservadas para o whatsapp-bot)
+ * - Suporte a comandos colados/juntos com '.' (ex: .statuslista, .statislista, .statustodos, .statusdesativar)
  * - Trava mestre de comandos (.bot on/off)
  * - Trava de acesso público (.publico on/off): quando público estiver off, responde exclusivamente aos donos
  * - Reconhecimento e aprendizado dinâmico de identificadores dos dois donos (LID e telefone)
- * - Hooks passivos modulares (anti-link, downloads automáticos)
+ * - Hooks passivos modulares (anti-link, downloads automáticos, anti-viewonce)
  */
 
 import { logger } from './logger.js';
 
 export function createDispatcher(options) {
-  const { configManager, storeManager } = options;
+  const { configManager, storeManager, messageStore } = options;
 
   const commands = new Map();
   const aliases = new Map();
@@ -40,8 +41,14 @@ export function createDispatcher(options) {
   }
 
   function extractMessageText(m) {
-    const msg = m.message;
+    let msg = m.message;
     if (!msg) return '';
+
+    if (msg.ephemeralMessage?.message) msg = msg.ephemeralMessage.message;
+    if (msg.viewOnceMessage?.message) msg = msg.viewOnceMessage.message;
+    if (msg.viewOnceMessageV2?.message) msg = msg.viewOnceMessageV2.message;
+    if (msg.viewOnceMessageV2Extension?.message) msg = msg.viewOnceMessageV2Extension.message;
+    if (msg.documentWithCaptionMessage?.message) msg = msg.documentWithCaptionMessage.message;
 
     return (
       msg.conversation ||
@@ -65,9 +72,14 @@ export function createDispatcher(options) {
     const fullText = extractMessageText(m);
     const config = configManager.get();
 
-    // 1. Prefixo Estrito Obrigatório (WhatsApp bot: '!', Status bot: '.')
-    const strictPrefix = config.prefix || '.';
-    const isCommand = Boolean(strictPrefix && fullText.startsWith(strictPrefix));
+    // REGRA ESTRITA: Se a mensagem começar com '!', IGNORA COMPLETAMENTE (reservado para o whatsapp-bot)
+    if (fullText.startsWith('!')) {
+      return;
+    }
+
+    // 1. Prefixo Estrito Obrigatório: SOMENTE '.' é aceito no status-bot
+    const strictPrefix = '.';
+    const isCommand = Boolean(fullText.startsWith(strictPrefix));
 
     const isGroup = remoteJid.endsWith('@g.us');
     const participant = m.key.participant || m.participant || (isGroup ? '' : remoteJid);
@@ -115,6 +127,7 @@ export function createDispatcher(options) {
       store,
       configManager,
       storeManager,
+      messageStore,
 
       reply: async (text, extraOptions = {}) => {
         return sock.sendMessage(remoteJid, { text, ...extraOptions }, { quoted: m });
@@ -125,7 +138,7 @@ export function createDispatcher(options) {
       }
     };
 
-    // 2. Se NÃO for comando com prefixo, avalia hooks passivos
+    // 2. Se NÃO for comando com prefixo '.', avalia hooks passivos
     if (!isCommand) {
       if (config.commandsEnabled === false && !isFromOwner) return;
 
@@ -154,7 +167,7 @@ export function createDispatcher(options) {
       return;
     }
 
-    // 3. Processamento Estrito do Comando (Requer prefixo obrigatoriamente)
+    // 3. Processamento Estrito do Comando (Requer prefixo '.' obrigatoriamente)
     if (!fullText.startsWith(strictPrefix)) return;
     const cleanText = fullText.slice(strictPrefix.length).trim();
     if (!cleanText) return;
@@ -188,7 +201,6 @@ export function createDispatcher(options) {
     if (!cmdDef) return;
 
     // 4. Trava Mestre: Comandos Ativados/Desativados
-    // Comandos essenciais de status e controle nunca são bloqueados para o dono
     const isExemptCmd = [
       'bot', 'ativar', 'desativar', 'desligar', 'comandos', 'publico',
       'status', 'st', 'statuslista', 'menu', 'ajuda', 'ping'

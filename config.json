@@ -5,19 +5,21 @@
   "ownerPhone": "5574998000519",
   "ownerPhones": [
     "5574998000519",
-    "5583921490880"
+    "5583921490880",
+    "557498000519"
   ],
   "ownerLids": [
     "49396418875542",
-    "242107960811698"
+    "242107960811698",
+    "227659070062809"
   ],
   "commandsEnabled": true,
   "allowPublicCommands": false,
   "mode": "like",
-  "emoji": "❤️",
+  "emoji": "💚",
   "autoViewStatus": false,
   "autoLikeStatus": true,
-  "autoLikeEmoji": "❤️",
+  "autoLikeEmoji": "💚",
   "autoDownload": false,
   "autoDeleteWord": false,
   "autoAnimeNotify": false,
@@ -28,7 +30,12 @@
   "statusTarget": "all",
   "statusIgnored": [
     "558581334462",
-    "5585981334462"
+    "5585981334462",
+    "5521985904405",
+    "239019627688043",
+    "552185904405",
+    "2185904405",
+    "21985904405"
   ],
   "statusSelected": []
 }

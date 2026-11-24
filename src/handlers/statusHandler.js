@@ -5,6 +5,8 @@
  * - Filtro mestre: se mode for 'off', não visualiza e nem curte
  * - Lista de Bloqueados / Ignorados (statusIgnored): nunca visualiza nem curte contatos na lista
  * - Modo Alvo (statusTarget): 'all' (todos menos ignorados) ou 'selected' (somente contatos em statusSelected)
+ * - Permite curtidas mútuas entre bots e contatos (um bot curte o status do outro e de todos os contatos)
+ * - Ignora o próprio status da mesma conta conectada (m.key.fromMe === true)
  * - Deduplicação em memória (máx 3000 status)
  */
 
@@ -29,31 +31,46 @@ export function createStatusHandler(options) {
   }
 
   async function handleStatusMessage(m, sock) {
-    if (!m.message) return;
-    const remoteJid = m.key.remoteJid;
+    if (!m?.message) return;
+    const remoteJid = m.key?.remoteJid;
     if (remoteJid !== 'status@broadcast') return;
 
-    const participant = m.key.participant;
-    if (m.key.fromMe || !participant) return;
+    // 1. Ignora se a mensagem for uma reação ou controle de protocolo (revoke/delete)
+    if (
+      m.message.reactionMessage ||
+      m.message.protocolMessage ||
+      m.message.ephemeralMessage?.message?.reactionMessage ||
+      m.message.ephemeralMessage?.message?.protocolMessage ||
+      m.message.viewOnceMessage?.message?.reactionMessage ||
+      m.message.viewOnceMessage?.message?.protocolMessage ||
+      m.message.viewOnceMessageV2?.message?.reactionMessage ||
+      m.message.viewOnceMessageV2?.message?.protocolMessage
+    ) {
+      return;
+    }
+
+    const participant = m.key?.participant || m.participant;
+    // Ignora status postado pela própria conta conectada (fromMe === true)
+    if (m.key?.fromMe || !participant) return;
 
     if (isAlreadyProcessed(m.key.id)) return;
 
     const cfg = configManager.get();
 
-    // 1. Verificação Mestre de Modo Desligado
+    // 2. Verificação Mestre de Modo Desligado
     if (cfg.mode === 'off') {
       return;
     }
 
     const senderPhone = normalizePhone(participant);
 
-    // 2. Filtro de Bloqueados / Ignorados (Blacklist)
+    // 3. Filtro de Bloqueados / Ignorados (Blacklist)
     if (isPhoneInList(senderPhone, cfg.statusIgnored || [])) {
       logger.status('STATUS', `⛔ Status de +${senderPhone} IGNORADO (está na lista de bloqueados/ignorados)`);
       return;
     }
 
-    // 3. Filtro de Modo Alvo (Target: 'all' vs 'selected')
+    // 4. Filtro de Modo Alvo (Target: 'all' vs 'selected')
     const targetMode = (cfg.statusTarget || 'all').toLowerCase();
     if (targetMode === 'selected' || targetMode === 'selecionados') {
       if (!isPhoneInList(senderPhone, cfg.statusSelected || [])) {
@@ -62,8 +79,12 @@ export function createStatusHandler(options) {
       }
     }
 
-    const shouldView = Boolean(cfg.mode === 'view' || cfg.mode === 'both' || (cfg.mode !== 'off' && cfg.autoViewStatus));
-    const shouldLike = Boolean(cfg.mode === 'like' || cfg.mode === 'both' || (cfg.mode !== 'off' && cfg.autoLikeStatus));
+    const shouldView = Boolean(
+      cfg.mode === 'view' || cfg.mode === 'both' || (cfg.mode !== 'off' && cfg.autoViewStatus)
+    );
+    const shouldLike = Boolean(
+      cfg.mode === 'like' || cfg.mode === 'both' || (cfg.mode !== 'off' && cfg.autoLikeStatus)
+    );
 
     if (!shouldView && !shouldLike) return;
 
@@ -84,22 +105,26 @@ export function createStatusHandler(options) {
 
       // 2. Reagir / Curtir Status
       if (shouldLike) {
-        const emoji = cfg.autoLikeEmoji || cfg.emoji || '❤️';
-        await sock.sendMessage('status@broadcast', {
-          react: {
-            text: emoji,
-            key: statusKey
+        const emoji = cfg.autoLikeEmoji || cfg.emoji || '💚';
+        await sock.sendMessage(
+          'status@broadcast',
+          {
+            react: {
+              text: emoji,
+              key: statusKey
+            }
+          },
+          {
+            statusJidList: [participant]
           }
-        }, {
-          statusJidList: [participant]
-        });
+        );
 
         const count = storeManager.incrementLiked();
         const preservedNote = !shouldView ? ' (🟢 Círculo verde preservado no celular)' : '';
-        logger.status('STATUS', `❤️ Status curtido com ${emoji} de +${sender}${preservedNote} (Total curtidos: ${count})`);
+        logger.status('STATUS', `💚 Status curtido com ${emoji} de +${sender}${preservedNote} (Total curtidos: ${count})`);
       }
     } catch (err) {
-      logger.error('STATUS', `Erro ao processar status: ${err.message}`);
+      logger.error('STATUS', `Erro ao processar status de +${senderPhone || participant}: ${err.message}`);
     }
   }
 
