@@ -4,7 +4,7 @@
  * Funcionalidades (sem extras):
  * - Visualizador e Curtidor Automático de Status (Stories) com preservação de círculo verde
  * - Presença fake contínua (Digitando, Gravando áudio, Online)
- * - Comandos de Status, Grupos e Figurinhas exclusivamente no prefixo ';'
+ * - Comandos de Status, Grupos e Figurinhas exclusivamente no prefixo '.'
  * - Núcleo 100% padronizado com o whatsapp-bot e controle estrito de memória
  */
 
@@ -25,7 +25,7 @@ import { registerStickerCommands } from './src/commands/media/stickers.js';
 async function main() {
   const configManager = createConfigManager('./config.json', {
     botName: 'Status Bot Pessoal',
-    prefix: ';',
+    prefix: '.',
     mode: 'like',
     emoji: '💚'
   });
@@ -37,12 +37,12 @@ async function main() {
   });
 
   const config = configManager.get();
-  if (config.prefix !== ';') {
-    configManager.save({ prefix: ';' });
+  if (config.prefix !== '.') {
+    configManager.save({ prefix: '.' });
   }
 
   logger.banner(config.botName, [
-    'Prefixo Estrito: ; (ignora ! e .)',
+    'Prefixo Estrito: . (ignora !)',
     `Donos: ${configManager.getOwnerPhones().join(', ') || 'Nenhum'}`,
     `Modo Inicial: ${(config.mode || 'like').toUpperCase()} (Emoji: ${config.emoji || '💚'})`,
     'Inicializando gerenciadores e listeners...'
@@ -52,8 +52,8 @@ async function main() {
     configManager,
     storeManager,
     messageStore,
-    prefix: ';',
-    ignoredPrefixes: ['!', '.']
+    prefix: '.',
+    ignoredPrefixes: ['!']
   });
 
   const statusHandler = createStatusHandler({ configManager, storeManager });
